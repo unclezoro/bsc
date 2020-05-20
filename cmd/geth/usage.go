@@ -31,7 +31,7 @@ import (
 var AppHelpTemplate = `NAME:
    {{.App.Name}} - {{.App.Usage}}
 
-   Copyright 2013-2019 The go-ethereum Authors
+   Copyright 2013-2019 The go-ethereum Authors and BSC Authors
 
 USAGE:
    {{.App.HelpName}} [options]{{if .App.Commands}} command [command options]{{end}} {{if .App.ArgsUsage}}{{.App.ArgsUsage}}{{else}}[arguments...]{{end}}
@@ -70,6 +70,8 @@ var AppHelpFlagGroups = []flagGroup{
 			utils.AncientFlag,
 			utils.KeyStoreDirFlag,
 			utils.NoUSBFlag,
+			utils.DirectBroadcastFlag,
+			utils.RangeLimitFlag,
 			utils.SmartCardDaemonPathFlag,
 			utils.NetworkIdFlag,
 			utils.GoerliFlag,
@@ -209,6 +211,7 @@ var AppHelpFlagGroups = []flagGroup{
 			utils.MinerEtherbaseFlag,
 			utils.MinerExtraDataFlag,
 			utils.MinerRecommitIntervalFlag,
+			utils.MinerDelayLeftoverFlag,
 			utils.MinerNoVerfiyFlag,
 		},
 	},

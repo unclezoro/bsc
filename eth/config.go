@@ -54,15 +54,17 @@ var DefaultConfig = Config{
 	TrieTimeout:        60 * time.Minute,
 	SnapshotCache:      256,
 	Miner: miner.Config{
-		GasFloor: 8000000,
-		GasCeil:  8000000,
-		GasPrice: big.NewInt(params.GWei),
-		Recommit: 3 * time.Second,
+		GasFloor:      8000000,
+		GasCeil:       8000000,
+		GasPrice:      big.NewInt(params.GWei),
+		Recommit:      3 * time.Second,
+		DelayLeftOver: 50 * time.Millisecond,
 	},
 	TxPool: core.DefaultTxPoolConfig,
 	GPO: gasprice.Config{
-		Blocks:     20,
-		Percentile: 60,
+		Blocks:          20,
+		Percentile:      60,
+		OracleThreshold: 1000,
 	},
 }
 
@@ -102,8 +104,10 @@ type Config struct {
 	// for nodes to connect to.
 	DiscoveryURLs []string
 
-	NoPruning  bool // Whether to disable pruning and flush everything to disk
-	NoPrefetch bool // Whether to disable prefetching and only load state on demand
+	NoPruning       bool // Whether to disable pruning and flush everything to disk
+	NoPrefetch      bool // Whether to disable prefetching and only load state on demand
+	DirectBroadcast bool
+	RangeLimit      bool
 
 	// Whitelist of required block number -> hash values to accept
 	Whitelist map[uint64]common.Hash `toml:"-"`
@@ -134,7 +138,7 @@ type Config struct {
 	Miner miner.Config
 
 	// Ethash options
-	Ethash ethash.Config
+	Ethash ethash.Config `toml:",omitempty"`
 
 	// Transaction pool options
 	TxPool core.TxPoolConfig

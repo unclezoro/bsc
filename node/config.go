@@ -95,6 +95,12 @@ type Config struct {
 	// NoUSB disables hardware wallet monitoring and connectivity.
 	NoUSB bool `toml:",omitempty"`
 
+	// DirectBroadcast enable directly broadcast mined block to all peers
+	DirectBroadcast bool `toml:",omitempty"`
+
+	// RangeLimit enable 5000 blocks limit when handle range query
+	RangeLimit bool `toml:",omitempty"`
+
 	// SmartCardDaemonPath is the path to the smartcard daemon's socket
 	SmartCardDaemonPath string `toml:",omitempty"`
 
@@ -187,6 +193,8 @@ type Config struct {
 
 	// Logger is a custom logger to use with the p2p.Server.
 	Logger log.Logger `toml:",omitempty"`
+
+	LogConfig *LogConfig `toml:",omitempty"`
 
 	staticNodesWarning     bool
 	trustedNodesWarning    bool
@@ -542,4 +550,11 @@ func (c *Config) warnOnce(w *bool, format string, args ...interface{}) {
 	}
 	l.Warn(fmt.Sprintf(format, args...))
 	*w = true
+}
+
+type LogConfig struct {
+	FileRoot     string
+	FilePath     string
+	MaxBytesSize uint
+	Level        string
 }

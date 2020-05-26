@@ -58,8 +58,6 @@ const (
 	SlashContract              = "0x0000000000000000000000000000000000001001"
 	SystemRewardContract       = "0x0000000000000000000000000000000000001002"
 	LightClientContract        = "0x0000000000000000000000000000000000001003"
-	TokenHubContract           = "0x0000000000000000000000000000000000001004"
-	RelayerIncentivizeContract = "0x0000000000000000000000000000000000001005"
 	RelayerHubContract         = "0x0000000000000000000000000000000000001006"
 	GovHubContract             = "0x0000000000000000000000000000000000001007"
 )
@@ -78,8 +76,6 @@ var (
 		common.HexToAddress(LightClientContract):        true,
 		common.HexToAddress(RelayerHubContract):         true,
 		common.HexToAddress(GovHubContract):             true,
-		common.HexToAddress(TokenHubContract):           true,
-		common.HexToAddress(RelayerIncentivizeContract): true,
 	}
 )
 
@@ -981,7 +977,7 @@ func (p *Parlia) initContract(state *state.StateDB, header *types.Header, chain 
 	// method
 	method := "init"
 	// contracts
-	contracts := []string{ValidatorContract, SlashContract, LightClientContract, RelayerHubContract, GovHubContract, TokenHubContract, RelayerIncentivizeContract}
+	contracts := []string{ValidatorContract, SlashContract, LightClientContract, RelayerHubContract, GovHubContract}
 	// get packed data
 	data, err := p.validatorSetABI.Pack(method)
 	if err != nil {

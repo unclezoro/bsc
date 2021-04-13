@@ -43,14 +43,15 @@ type Backend interface {
 
 // Config is the configuration parameters of mining.
 type Config struct {
-	Etherbase common.Address `toml:",omitempty"` // Public address for block mining rewards (default = first account)
-	Notify    []string       `toml:",omitempty"` // HTTP URL list to be notified of new work packages(only useful in ethash).
-	ExtraData hexutil.Bytes  `toml:",omitempty"` // Block extra data set by the miner
-	GasFloor  uint64         // Target gas floor for mined blocks.
-	GasCeil   uint64         // Target gas ceiling for mined blocks.
-	GasPrice  *big.Int       // Minimum gas price for mining a transaction
-	Recommit  time.Duration  // The time interval for miner to re-create mining work.
-	Noverify  bool           // Disable remote mining solution verification(only useful in ethash).
+	Etherbase     common.Address `toml:",omitempty"` // Public address for block mining rewards (default = first account)
+	Notify        []string       `toml:",omitempty"` // HTTP URL list to be notified of new work packages(only useful in ethash).
+	ExtraData     hexutil.Bytes  `toml:",omitempty"` // Block extra data set by the miner
+	DelayLeftOver time.Duration  // Time for broadcast block
+	GasFloor      uint64         // Target gas floor for mined blocks.
+	GasCeil       uint64         // Target gas ceiling for mined blocks.
+	GasPrice      *big.Int       // Minimum gas price for mining a transaction
+	Recommit      time.Duration  // The time interval for miner to re-create mining work.
+	Noverify      bool           // Disable remote mining solution verification(only useful in ethash).
 }
 
 // Miner creates blocks and searches for proof-of-work values.
@@ -72,7 +73,7 @@ func New(eth Backend, config *Config, chainConfig *params.ChainConfig, mux *even
 		mux:      mux,
 		engine:   engine,
 		exitCh:   make(chan struct{}),
-		worker:   newWorker(config, chainConfig, engine, eth, mux, isLocalBlock, true),
+		worker:   newWorker(config, chainConfig, engine, eth, mux, isLocalBlock, false),
 		canStart: 1,
 	}
 	go miner.update()
@@ -166,7 +167,20 @@ func (miner *Miner) SetRecommitInterval(interval time.Duration) {
 
 // Pending returns the currently pending block and associated state.
 func (miner *Miner) Pending() (*types.Block, *state.StateDB) {
-	return miner.worker.pending()
+	if miner.worker.isRunning() {
+		return miner.worker.pending()
+	} else {
+		// fallback to latest block
+		block := miner.worker.chain.CurrentBlock()
+		if block == nil {
+			return nil, nil
+		}
+		stateDb, err := miner.worker.chain.StateAt(block.Root())
+		if err != nil {
+			return nil, nil
+		}
+		return block, stateDb
+	}
 }
 
 // PendingBlock returns the currently pending block.
@@ -175,7 +189,12 @@ func (miner *Miner) Pending() (*types.Block, *state.StateDB) {
 // simultaneously, please use Pending(), as the pending state can
 // change between multiple method calls
 func (miner *Miner) PendingBlock() *types.Block {
-	return miner.worker.pendingBlock()
+	if miner.worker.isRunning() {
+		return miner.worker.pendingBlock()
+	} else {
+		// fallback to latest block
+		return miner.worker.chain.CurrentBlock()
+	}
 }
 
 func (miner *Miner) SetEtherbase(addr common.Address) {

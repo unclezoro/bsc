@@ -52,22 +52,24 @@ type filter struct {
 // PublicFilterAPI offers support to create and manage filters. This will allow external clients to retrieve various
 // information related to the Ethereum protocol such als blocks, transactions and logs.
 type PublicFilterAPI struct {
-	backend   Backend
-	mux       *event.TypeMux
-	quit      chan struct{}
-	chainDb   ethdb.Database
-	events    *EventSystem
-	filtersMu sync.Mutex
-	filters   map[rpc.ID]*filter
+	backend    Backend
+	mux        *event.TypeMux
+	quit       chan struct{}
+	chainDb    ethdb.Database
+	events     *EventSystem
+	filtersMu  sync.Mutex
+	filters    map[rpc.ID]*filter
+	rangeLimit bool
 }
 
 // NewPublicFilterAPI returns a new PublicFilterAPI instance.
-func NewPublicFilterAPI(backend Backend, lightMode bool) *PublicFilterAPI {
+func NewPublicFilterAPI(backend Backend, lightMode, rangeLimit bool) *PublicFilterAPI {
 	api := &PublicFilterAPI{
-		backend: backend,
-		chainDb: backend.ChainDb(),
-		events:  NewEventSystem(backend, lightMode),
-		filters: make(map[rpc.ID]*filter),
+		backend:    backend,
+		chainDb:    backend.ChainDb(),
+		events:     NewEventSystem(backend, lightMode),
+		filters:    make(map[rpc.ID]*filter),
+		rangeLimit: rangeLimit,
 	}
 	go api.timeoutLoop()
 
@@ -107,20 +109,16 @@ func (api *PublicFilterAPI) NewPendingTransactionFilter() rpc.ID {
 		pendingTxs   = make(chan []common.Hash)
 		pendingTxSub = api.events.SubscribePendingTxs(pendingTxs)
 	)
-
+	f := &filter{typ: PendingTransactionsSubscription, deadline: time.NewTimer(deadline), hashes: make([]common.Hash, 0), s: pendingTxSub}
 	api.filtersMu.Lock()
-	api.filters[pendingTxSub.ID] = &filter{typ: PendingTransactionsSubscription, deadline: time.NewTimer(deadline), hashes: make([]common.Hash, 0), s: pendingTxSub}
+	api.filters[pendingTxSub.ID] = f
 	api.filtersMu.Unlock()
 
 	go func() {
 		for {
 			select {
 			case ph := <-pendingTxs:
-				api.filtersMu.Lock()
-				if f, found := api.filters[pendingTxSub.ID]; found {
-					f.hashes = append(f.hashes, ph...)
-				}
-				api.filtersMu.Unlock()
+				f.hashes = append(f.hashes, ph...)
 			case <-pendingTxSub.Err():
 				api.filtersMu.Lock()
 				delete(api.filters, pendingTxSub.ID)
@@ -339,7 +337,7 @@ func (api *PublicFilterAPI) GetLogs(ctx context.Context, crit FilterCriteria) ([
 			end = crit.ToBlock.Int64()
 		}
 		// Construct the range filter
-		filter = NewRangeFilter(api.backend, begin, end, crit.Addresses, crit.Topics)
+		filter = NewRangeFilter(api.backend, begin, end, crit.Addresses, crit.Topics, api.rangeLimit)
 	}
 	// Run the filter and return all the logs
 	logs, err := filter.Logs(ctx)
@@ -394,7 +392,7 @@ func (api *PublicFilterAPI) GetFilterLogs(ctx context.Context, id rpc.ID) ([]*ty
 			end = f.crit.ToBlock.Int64()
 		}
 		// Construct the range filter
-		filter = NewRangeFilter(api.backend, begin, end, f.crit.Addresses, f.crit.Topics)
+		filter = NewRangeFilter(api.backend, begin, end, f.crit.Addresses, f.crit.Topics, api.rangeLimit)
 	}
 	// Run the filter and return all the logs
 	logs, err := filter.Logs(ctx)

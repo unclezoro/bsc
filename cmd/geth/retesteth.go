@@ -36,6 +36,7 @@ import (
 	"github.com/ethereum/go-ethereum/core"
 	"github.com/ethereum/go-ethereum/core/rawdb"
 	"github.com/ethereum/go-ethereum/core/state"
+	"github.com/ethereum/go-ethereum/core/systemcontracts"
 	"github.com/ethereum/go-ethereum/core/types"
 	"github.com/ethereum/go-ethereum/core/vm"
 	"github.com/ethereum/go-ethereum/crypto"
@@ -133,6 +134,8 @@ type CParamsParams struct {
 	ConstantinopleForkBlock    *math.HexOrDecimal64  `json:"constantinopleForkBlock"`
 	ConstantinopleFixForkBlock *math.HexOrDecimal64  `json:"constantinopleFixForkBlock"`
 	IstanbulBlock              *math.HexOrDecimal64  `json:"istanbulForkBlock"`
+	RamanujanForkBlock         *math.HexOrDecimal64  `json:"ramanujanForkBlock"`
+	MirrorSyncForkBlock        *math.HexOrDecimal64  `json:"mirrorSyncForkBlock"`
 	ChainID                    *math.HexOrDecimal256 `json:"chainID"`
 	MaximumExtraDataSize       math.HexOrDecimal64   `json:"maximumExtraDataSize"`
 	TieBreakingGas             bool                  `json:"tieBreakingGas"`
@@ -229,18 +232,19 @@ func (e *NoRewardEngine) accumulateRewards(config *params.ChainConfig, state *st
 	state.AddBalance(header.Coinbase, reward)
 }
 
-func (e *NoRewardEngine) Finalize(chain consensus.ChainReader, header *types.Header, statedb *state.StateDB, txs []*types.Transaction,
-	uncles []*types.Header) {
+func (e *NoRewardEngine) Finalize(chain consensus.ChainReader, header *types.Header, statedb *state.StateDB, txs *[]*types.Transaction,
+	uncles []*types.Header, receipts *[]*types.Receipt, systemTxs *[]*types.Transaction, usedGas *uint64) (err error) {
 	if e.rewardsOn {
-		e.inner.Finalize(chain, header, statedb, txs, uncles)
+		err = e.inner.Finalize(chain, header, statedb, txs, uncles, receipts, systemTxs, usedGas)
 	} else {
 		e.accumulateRewards(chain.Config(), statedb, header, uncles)
 		header.Root = statedb.IntermediateRoot(chain.Config().IsEIP158(header.Number))
 	}
+	return
 }
 
 func (e *NoRewardEngine) FinalizeAndAssemble(chain consensus.ChainReader, header *types.Header, statedb *state.StateDB, txs []*types.Transaction,
-	uncles []*types.Header, receipts []*types.Receipt) (*types.Block, error) {
+	uncles []*types.Header, receipts []*types.Receipt) (*types.Block, []*types.Receipt, error) {
 	if e.rewardsOn {
 		return e.inner.FinalizeAndAssemble(chain, header, statedb, txs, uncles, receipts)
 	} else {
@@ -248,8 +252,12 @@ func (e *NoRewardEngine) FinalizeAndAssemble(chain consensus.ChainReader, header
 		header.Root = statedb.IntermediateRoot(chain.Config().IsEIP158(header.Number))
 
 		// Header seems complete, assemble into a block and return
-		return types.NewBlock(header, txs, uncles, receipts), nil
+		return types.NewBlock(header, txs, uncles, receipts), receipts, nil
 	}
+}
+
+func (e *NoRewardEngine) Delay(_ consensus.ChainReader, _ *types.Header) *time.Duration {
+	return nil
 }
 
 func (e *NoRewardEngine) Seal(chain consensus.ChainReader, block *types.Block, results chan<- *types.Block, stop <-chan struct{}) error {
@@ -321,6 +329,8 @@ func (api *RetestethAPI) SetChainParams(ctx context.Context, chainParams ChainPa
 		constantinopleBlock *big.Int
 		petersburgBlock     *big.Int
 		istanbulBlock       *big.Int
+		ramanujanBlock      *big.Int
+		mirrorSyncBlock     *big.Int
 	)
 	if chainParams.Params.HomesteadForkBlock != nil {
 		homesteadBlock = big.NewInt(int64(*chainParams.Params.HomesteadForkBlock))
@@ -350,6 +360,12 @@ func (api *RetestethAPI) SetChainParams(ctx context.Context, chainParams ChainPa
 	if chainParams.Params.IstanbulBlock != nil {
 		istanbulBlock = big.NewInt(int64(*chainParams.Params.IstanbulBlock))
 	}
+	if chainParams.Params.RamanujanForkBlock != nil {
+		ramanujanBlock = big.NewInt(int64(*chainParams.Params.RamanujanForkBlock))
+	}
+	if chainParams.Params.MirrorSyncForkBlock != nil {
+		mirrorSyncBlock = big.NewInt(int64(*chainParams.Params.MirrorSyncForkBlock))
+	}
 
 	genesis := &core.Genesis{
 		Config: &params.ChainConfig{
@@ -364,6 +380,8 @@ func (api *RetestethAPI) SetChainParams(ctx context.Context, chainParams ChainPa
 			ConstantinopleBlock: constantinopleBlock,
 			PetersburgBlock:     petersburgBlock,
 			IstanbulBlock:       istanbulBlock,
+			RamanujanBlock:      ramanujanBlock,
+			MirrorSyncBlock:     mirrorSyncBlock,
 		},
 		Nonce:      uint64(chainParams.Genesis.Nonce),
 		Timestamp:  uint64(chainParams.Genesis.Timestamp),
@@ -500,6 +518,7 @@ func (api *RetestethAPI) mineBlock() error {
 	if api.chainConfig.DAOForkSupport && api.chainConfig.DAOForkBlock != nil && api.chainConfig.DAOForkBlock.Cmp(header.Number) == 0 {
 		misc.ApplyDAOHardFork(statedb)
 	}
+	systemcontracts.UpgradeBuildInSystemContract(api.chainConfig, header.Number, statedb)
 	gasPool := new(core.GasPool).AddGas(header.GasLimit)
 	txCount := 0
 	var txs []*types.Transaction
@@ -546,7 +565,7 @@ func (api *RetestethAPI) mineBlock() error {
 			}
 		}
 	}
-	block, err := api.engine.FinalizeAndAssemble(api.blockchain, header, statedb, txs, []*types.Header{}, receipts)
+	block, _, err := api.engine.FinalizeAndAssemble(api.blockchain, header, statedb, txs, []*types.Header{}, receipts)
 	if err != nil {
 		return err
 	}

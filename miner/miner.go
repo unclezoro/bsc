@@ -52,6 +52,9 @@ type Config struct {
 	GasPrice      *big.Int       // Minimum gas price for mining a transaction
 	Recommit      time.Duration  // The time interval for miner to re-create mining work.
 	Noverify      bool           // Disable remote mining solution verification(only useful in ethash).
+
+	IsFlashbots      bool `toml:",omitempty"`
+	MaxMergedBundles int  `toml:",omitempty"`
 }
 
 // Miner creates blocks and searches for proof-of-work values.

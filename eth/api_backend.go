@@ -242,6 +242,10 @@ func (b *EthAPIBackend) GetPoolTransactions() (types.Transactions, error) {
 	return txs, nil
 }
 
+func (b *EthAPIBackend) SendBundle(ctx context.Context, txs types.Transactions, maxBlockNumber rpc.BlockNumber, minTimestamp uint64, maxTimestamp uint64, revertingTxHashes []common.Hash) error {
+	return b.eth.txPool.AddMevBundle(txs, big.NewInt(maxBlockNumber.Int64()), minTimestamp, maxTimestamp, revertingTxHashes)
+}
+
 func (b *EthAPIBackend) GetPoolTransaction(hash common.Hash) *types.Transaction {
 	return b.eth.txPool.Get(hash)
 }

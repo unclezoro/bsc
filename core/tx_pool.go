@@ -24,6 +24,8 @@ import (
 	"sync"
 	"time"
 
+	"github.com/google/uuid"
+
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/common/prque"
 	"github.com/ethereum/go-ethereum/core/state"
@@ -49,6 +51,8 @@ const (
 	// more expensive to propagate; larger transactions also take more resources
 	// to validate whether they fit into the pool or not.
 	txMaxSize = 4 * txSlotSize // 128KB
+
+	maxBundleLifetime = 5 * 60 // 5 minutes
 )
 
 var (
@@ -83,6 +87,9 @@ var (
 	// than some meaningful limit a user might use. This is not a consensus error
 	// making the transaction invalid, rather a DOS protection.
 	ErrOversizedData = errors.New("oversized data")
+
+	// ErrorBundleLifeTooLarge is returned if the bundle may stay too long
+	ErrorBundleLifeTooLarge = errors.New("the maxTimestamp of bundle time is too large")
 )
 
 var (
@@ -238,11 +245,12 @@ type TxPool struct {
 	locals  *accountSet // Set of local transaction to exempt from eviction rules
 	journal *txJournal  // Journal of local transaction to back up to disk
 
-	pending map[common.Address]*txList   // All currently processable transactions
-	queue   map[common.Address]*txList   // Queued but non-processable transactions
-	beats   map[common.Address]time.Time // Last heartbeat from each known account
-	all     *txLookup                    // All transactions to allow lookups
-	priced  *txPricedList                // All transactions sorted by price
+	pending    map[common.Address]*txList   // All currently processable transactions
+	queue      map[common.Address]*txList   // Queued but non-processable transactions
+	beats      map[common.Address]time.Time // Last heartbeat from each known account
+	mevBundles map[uuid.UUID]*types.MevBundle
+	all        *txLookup     // All transactions to allow lookups
+	priced     *txPricedList // All transactions sorted by price
 
 	chainHeadCh     chan ChainHeadEvent
 	chainHeadSub    event.Subscription
@@ -281,6 +289,7 @@ func NewTxPool(config TxPoolConfig, chainconfig *params.ChainConfig, chain block
 		reorgDoneCh:     make(chan chan struct{}),
 		reorgShutdownCh: make(chan struct{}),
 		gasPrice:        new(big.Int).SetUint64(config.PriceLimit),
+		mevBundles:      make(map[uuid.UUID]*types.MevBundle),
 	}
 	pool.locals = newAccountSet(pool.signer)
 	for _, addr := range config.Locals {
@@ -494,6 +503,70 @@ func (pool *TxPool) Pending() (map[common.Address]types.Transactions, error) {
 		pending[addr] = list.Flatten()
 	}
 	return pending, nil
+}
+
+/// AllMevBundles returns all the MEV Bundles currently in the pool
+func (pool *TxPool) AllMevBundles() map[uuid.UUID]*types.MevBundle {
+	return pool.mevBundles
+}
+
+// MevBundles returns a list of bundles valid for the given blockNumber/blockTimestamp
+// also prunes bundles that are outdated
+func (pool *TxPool) MevBundles(blockNumber *big.Int, blockTimestamp uint64) ([]types.MevBundle, error) {
+	pool.mu.Lock()
+	defer pool.mu.Unlock()
+
+	// returned values
+	var ret []types.MevBundle
+	// rolled over values
+	bundles := make(map[uuid.UUID]*types.MevBundle)
+
+	for uid, bundle := range pool.mevBundles {
+		// Prune outdated bundles
+		if (bundle.MaxTimestamp != 0 && blockTimestamp > bundle.MaxTimestamp) || blockNumber.Cmp(bundle.BlockNumber) > 0 {
+			continue
+		}
+
+		// Roll over future bundles
+		if bundle.MinTimestamp != 0 && blockTimestamp < bundle.MinTimestamp {
+			bundles[uid] = bundle
+			continue
+		}
+
+		// return the ones which are in time
+		ret = append(ret, *bundle)
+		// keep the bundles around internally until they need to be pruned
+		bundles[uid] = bundle
+	}
+
+	pool.mevBundles = bundles
+	return ret, nil
+}
+
+func (pool *TxPool) PruneBundle(bundle uuid.UUID) {
+	pool.mu.Lock()
+	defer pool.mu.Unlock()
+	delete(pool.mevBundles, bundle)
+}
+
+// AddMevBundle adds a mev bundle to the pool
+func (pool *TxPool) AddMevBundle(txs types.Transactions, blockNumber *big.Int, minTimestamp, maxTimestamp uint64, revertingTxHashes []common.Hash) error {
+	if maxTimestamp > uint64(time.Now().Unix()+maxBundleLifetime) {
+		return ErrorBundleLifeTooLarge
+	}
+	pool.mu.Lock()
+	defer pool.mu.Unlock()
+
+	uid := uuid.New()
+	pool.mevBundles[uid] = &types.MevBundle{
+		Txs:               txs,
+		BlockNumber:       blockNumber,
+		MinTimestamp:      minTimestamp,
+		MaxTimestamp:      maxTimestamp,
+		RevertingTxHashes: revertingTxHashes,
+		UId:               uid,
+	}
+	return nil
 }
 
 // Locals retrieves the accounts currently considered local by the pool.

@@ -24,7 +24,9 @@ import (
 	"sync"
 	"time"
 
-	"github.com/google/uuid"
+	"github.com/ethereum/go-ethereum/rlp"
+
+	"github.com/ethereum/go-ethereum/crypto"
 
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/common/prque"
@@ -51,8 +53,6 @@ const (
 	// more expensive to propagate; larger transactions also take more resources
 	// to validate whether they fit into the pool or not.
 	txMaxSize = 4 * txSlotSize // 128KB
-
-	maxBundleLifetime = 5 * 60 // 5 minutes
 )
 
 var (
@@ -88,8 +88,8 @@ var (
 	// making the transaction invalid, rather a DOS protection.
 	ErrOversizedData = errors.New("oversized data")
 
-	// ErrorBundleLifeTooLarge is returned if the bundle may stay too long
-	ErrorBundleLifeTooLarge = errors.New("the maxTimestamp of bundle time is too large")
+	// ErrorBundlePoolIsFull is returned if the number of bundle exceed the limit
+	ErrorBundlePoolIsFull = errors.New("bundle pool is full")
 )
 
 var (
@@ -144,6 +144,10 @@ type blockChain interface {
 	SubscribeChainHeadEvent(ch chan<- ChainHeadEvent) event.Subscription
 }
 
+type BundleSimulator interface {
+	SimulateBundle(bundle types.MevBundle) (*big.Int, error)
+}
+
 // TxPoolConfig are the configuration parameters of the transaction pool.
 type TxPoolConfig struct {
 	Locals    []common.Address // Addresses that should be treated by default as local
@@ -154,12 +158,12 @@ type TxPoolConfig struct {
 	PriceLimit uint64 // Minimum gas price to enforce for acceptance into the pool
 	PriceBump  uint64 // Minimum price bump percentage to replace an already existing transaction (nonce)
 
-	AccountSlots uint64 // Number of executable transaction slots guaranteed per account
-	GlobalSlots  uint64 // Maximum number of executable transaction slots for all accounts
-	AccountQueue uint64 // Maximum number of non-executable transaction slots permitted per account
-	GlobalQueue  uint64 // Maximum number of non-executable transaction slots for all accounts
-
-	Lifetime time.Duration // Maximum amount of time non-executable transaction are queued
+	AccountSlots uint64        // Number of executable transaction slots guaranteed per account
+	GlobalSlots  uint64        // Maximum number of executable transaction slots for all accounts
+	AccountQueue uint64        // Maximum number of non-executable transaction slots permitted per account
+	GlobalQueue  uint64        // Maximum number of non-executable transaction slots for all accounts
+	BundleSlot   uint64        // Maximum number of bundle slots for all accounts
+	Lifetime     time.Duration // Maximum amount of time non-executable transaction are queued
 }
 
 // DefaultTxPoolConfig contains the default configurations for the transaction
@@ -233,6 +237,7 @@ type TxPool struct {
 	txFeed      event.Feed
 	scope       event.SubscriptionScope
 	signer      types.Signer
+	simulator   BundleSimulator
 	mu          sync.RWMutex
 
 	istanbul bool // Fork indicator whether we are in the istanbul stage.
@@ -248,7 +253,7 @@ type TxPool struct {
 	pending    map[common.Address]*txList   // All currently processable transactions
 	queue      map[common.Address]*txList   // Queued but non-processable transactions
 	beats      map[common.Address]time.Time // Last heartbeat from each known account
-	mevBundles map[uuid.UUID]*types.MevBundle
+	mevBundles map[common.Hash]*types.MevBundle
 	all        *txLookup     // All transactions to allow lookups
 	priced     *txPricedList // All transactions sorted by price
 
@@ -289,7 +294,7 @@ func NewTxPool(config TxPoolConfig, chainconfig *params.ChainConfig, chain block
 		reorgDoneCh:     make(chan chan struct{}),
 		reorgShutdownCh: make(chan struct{}),
 		gasPrice:        new(big.Int).SetUint64(config.PriceLimit),
-		mevBundles:      make(map[uuid.UUID]*types.MevBundle),
+		mevBundles:      make(map[common.Hash]*types.MevBundle),
 	}
 	pool.locals = newAccountSet(pool.signer)
 	for _, addr := range config.Locals {
@@ -415,6 +420,10 @@ func (pool *TxPool) Stop() {
 	log.Info("Transaction pool stopped")
 }
 
+func (pool *TxPool) SetBundleSimulator(simulator BundleSimulator) {
+	pool.simulator = simulator
+}
+
 // SubscribeNewTxsEvent registers a subscription of NewTxsEvent and
 // starts sending event to the given channel.
 func (pool *TxPool) SubscribeNewTxsEvent(ch chan<- NewTxsEvent) event.Subscription {
@@ -506,8 +515,21 @@ func (pool *TxPool) Pending() (map[common.Address]types.Transactions, error) {
 }
 
 /// AllMevBundles returns all the MEV Bundles currently in the pool
-func (pool *TxPool) AllMevBundles() map[uuid.UUID]*types.MevBundle {
-	return pool.mevBundles
+func (pool *TxPool) AllMevBundles() []*types.MevBundle {
+	pool.mu.Lock()
+	defer pool.mu.Unlock()
+	bundles := make([]*types.MevBundle, 0, len(pool.mevBundles))
+	for _, bundle := range pool.mevBundles {
+		bundles = append(bundles, bundle)
+	}
+	return bundles
+}
+
+func (pool *TxPool) GetMevBundles(hash common.Hash) *types.MevBundle {
+	pool.mu.Lock()
+	defer pool.mu.Unlock()
+
+	return pool.mevBundles[hash]
 }
 
 // MevBundles returns a list of bundles valid for the given blockNumber/blockTimestamp
@@ -519,11 +541,11 @@ func (pool *TxPool) MevBundles(blockNumber *big.Int, blockTimestamp uint64) ([]t
 	// returned values
 	var ret []types.MevBundle
 	// rolled over values
-	bundles := make(map[uuid.UUID]*types.MevBundle)
+	bundles := make(map[common.Hash]*types.MevBundle)
 
 	for uid, bundle := range pool.mevBundles {
 		// Prune outdated bundles
-		if (bundle.MaxTimestamp != 0 && blockTimestamp > bundle.MaxTimestamp) || blockNumber.Cmp(bundle.BlockNumber) > 0 {
+		if (bundle.MaxTimestamp != 0 && blockTimestamp > bundle.MaxTimestamp) || (bundle.MaxBlockNumber != nil && bundle.MaxBlockNumber.Int64() != 0 && blockNumber.Cmp(bundle.MaxBlockNumber) > 0) {
 			continue
 		}
 
@@ -543,30 +565,56 @@ func (pool *TxPool) MevBundles(blockNumber *big.Int, blockTimestamp uint64) ([]t
 	return ret, nil
 }
 
-func (pool *TxPool) PruneBundle(bundle uuid.UUID) {
+func (pool *TxPool) PruneBundle(bundle common.Hash) {
 	pool.mu.Lock()
 	defer pool.mu.Unlock()
 	delete(pool.mevBundles, bundle)
 }
 
 // AddMevBundle adds a mev bundle to the pool
-func (pool *TxPool) AddMevBundle(txs types.Transactions, blockNumber *big.Int, minTimestamp, maxTimestamp uint64, revertingTxHashes []common.Hash) error {
-	if maxTimestamp > uint64(time.Now().Unix()+maxBundleLifetime) {
-		return ErrorBundleLifeTooLarge
+func (pool *TxPool) AddMevBundle(txs types.Transactions, maxBlockNumber *big.Int, minTimestamp, maxTimestamp uint64, revertingTxHashes []common.Hash) (common.Hash, error) {
+	if pool.simulator == nil {
+		return common.Hash{}, errors.New("bundle simulator is nil")
 	}
-	pool.mu.Lock()
-	defer pool.mu.Unlock()
-
-	uid := uuid.New()
-	pool.mevBundles[uid] = &types.MevBundle{
+	bundle := types.MevBundle{
 		Txs:               txs,
-		BlockNumber:       blockNumber,
+		MaxBlockNumber:    maxBlockNumber,
 		MinTimestamp:      minTimestamp,
 		MaxTimestamp:      maxTimestamp,
 		RevertingTxHashes: revertingTxHashes,
-		UId:               uid,
 	}
-	return nil
+	bz, err := rlp.EncodeToBytes(bundle)
+	if err != nil {
+		return common.Hash{}, err
+	}
+	hash := crypto.Keccak256Hash(bz)
+	bundle.Hash = hash
+	price, err := pool.simulator.SimulateBundle(bundle)
+	if err != nil {
+		return common.Hash{}, err
+	}
+	bundle.Price = price
+	pool.mu.Lock()
+	defer pool.mu.Unlock()
+	if _, ok := pool.mevBundles[hash]; ok {
+		return common.Hash{}, errors.New("bundle already exist")
+	}
+	if len(pool.mevBundles) > int(pool.config.BundleSlot) {
+		leastPrice := big.NewInt(math.MaxInt64)
+		leastBundleHash := common.Hash{}
+		for h, b := range pool.mevBundles {
+			if b.Price.Cmp(leastPrice) < 0 {
+				leastPrice = b.Price
+				leastBundleHash = h
+			}
+		}
+		if bundle.Price.Cmp(leastPrice) < 0 {
+			return common.Hash{}, ErrorBundlePoolIsFull
+		}
+		delete(pool.mevBundles, leastBundleHash)
+	}
+	pool.mevBundles[hash] = &bundle
+	return hash, nil
 }
 
 // Locals retrieves the accounts currently considered local by the pool.

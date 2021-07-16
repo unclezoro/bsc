@@ -601,19 +601,7 @@ func (c *ChainConfig) CheckConfigForkOrder() error {
 	}
 	var lastFork fork
 	for _, cur := range []fork{
-		{name: "homesteadBlock", block: c.HomesteadBlock},
-		{name: "daoForkBlock", block: c.DAOForkBlock, optional: true},
-		{name: "eip150Block", block: c.EIP150Block},
-		{name: "eip155Block", block: c.EIP155Block},
-		{name: "eip158Block", block: c.EIP158Block},
-		{name: "byzantiumBlock", block: c.ByzantiumBlock},
-		{name: "constantinopleBlock", block: c.ConstantinopleBlock},
-		{name: "petersburgBlock", block: c.PetersburgBlock},
-		{name: "istanbulBlock", block: c.IstanbulBlock},
-		{name: "muirGlacierBlock", block: c.MuirGlacierBlock, optional: true},
-		{name: "ramanujanBlock", block: c.RamanujanBlock},
 		{name: "mirrorSyncBlock", block: c.MirrorSyncBlock},
-		{name: "berlinBlock", block: c.BerlinBlock},
 	} {
 		if lastFork.name != "" {
 			// Next one must be higher number

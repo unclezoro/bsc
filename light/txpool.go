@@ -533,6 +533,6 @@ func (pool *TxPool) RemoveTx(hash common.Hash) {
 }
 
 // AddMevBundle adds a mev bundle to the pool
-func (pool *TxPool) AddMevBundle(txs types.Transactions, blockNumber *big.Int, minTimestamp uint64, maxTimestamp uint64, revertingTxHashes []common.Hash) error {
-	return nil
+func (pool *TxPool) AddMevBundle(txs types.Transactions, blockNumber *big.Int, minTimestamp uint64, maxTimestamp uint64, revertingTxHashes []common.Hash) (common.Hash, error) {
+	return common.Hash{}, nil
 }

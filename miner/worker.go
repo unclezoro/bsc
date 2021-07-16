@@ -699,7 +699,6 @@ func (w *worker) makeCurrent(parent *types.Block, header *types.Header) error {
 	if w.current != nil && w.current.state != nil {
 		w.current.state.StopPrefetcher()
 	}
-	env.gasPool = new(core.GasPool).AddGas(header.GasLimit)
 	w.current = env
 	return nil
 }
@@ -1004,10 +1003,6 @@ func (w *worker) commitNewWork(interrupt *int32, noempty bool, timestamp int64) 
 				return
 			}
 
-			if w.current.gasPool == nil {
-				w.current.gasPool = new(core.GasPool).AddGas(w.current.header.GasLimit)
-				w.current.gasPool.SubGas(params.SystemTxsGas)
-			}
 			bundles, err := w.eth.TxPool().MevBundles(header.Number, header.Time)
 			log.Error("Total bundles", "n", len(bundles))
 			if err != nil {
@@ -1015,7 +1010,7 @@ func (w *worker) commitNewWork(interrupt *int32, noempty bool, timestamp int64) 
 				return
 			}
 
-			bundleTxs, bundle, numBundles, err := w.generateFlashbotsBundle(bundles, w.coinbase, parent, header)
+			bundleTxs, bundle, numBundles, err := w.generateFlashbotsBundle(bundles, w.coinbase, parent, types.CopyHeader(header))
 			if err != nil {
 				log.Error("Failed to generate flashbots bundle", "err", err)
 				return
@@ -1099,6 +1094,9 @@ type simulatedBundle struct {
 }
 
 func (w *worker) generateFlashbotsBundle(bundles []types.MevBundle, coinbase common.Address, parent *types.Block, header *types.Header) (types.Transactions, simulatedBundle, int, error) {
+	sort.SliceStable(bundles, func(i, j int) bool {
+		return bundles[j].Price.Cmp(bundles[i].Price) < 0
+	})
 	simulatedBundles, err := w.simulateBundles(bundles, coinbase, parent, header)
 	if err != nil {
 		return nil, simulatedBundle{}, 0, err
@@ -1137,11 +1135,11 @@ func (w *worker) mergeBundles(bundles []simulatedBundle, parent *types.Block, he
 		floorGasPrice := new(big.Int).Mul(bundle.mevGasPrice, big.NewInt(99))
 		floorGasPrice = floorGasPrice.Div(floorGasPrice, big.NewInt(100))
 
-		simmed, err := w.computeBundleGas(bundle.originalBundle, parent, header, state, gasPool, len(finalBundle))
+		simmed, err := w.computeBundleGas(bundle.originalBundle, parent, header, state, gasPool, len(finalBundle), true, false)
 		if err != nil || simmed.mevGasPrice.Cmp(floorGasPrice) <= 0 {
 			state = prevState
 			gasPool = prevGasPool
-			log.Error("Failed to merge one bundle", "err", err, "belowFloorGasPrice", simmed.mevGasPrice.Cmp(floorGasPrice) <= 0)
+			log.Error("Failed to merge one bundle", "err", err, "floorGasPrice", floorGasPrice)
 			continue
 		}
 
@@ -1152,10 +1150,6 @@ func (w *worker) mergeBundles(bundles []simulatedBundle, parent *types.Block, he
 		mergedBundle.ethSentToCoinbase.Add(mergedBundle.ethSentToCoinbase, simmed.ethSentToCoinbase)
 		mergedBundle.totalGasUsed += simmed.totalGasUsed
 		count++
-
-		if count >= w.config.MaxMergedBundles {
-			break
-		}
 	}
 
 	if len(finalBundle) == 0 {
@@ -1173,18 +1167,23 @@ func (w *worker) mergeBundles(bundles []simulatedBundle, parent *types.Block, he
 func (w *worker) simulateBundles(bundles []types.MevBundle, coinbase common.Address, parent *types.Block, header *types.Header) ([]simulatedBundle, error) {
 	simulatedBundles := []simulatedBundle{}
 
+	var count int
 	for _, bundle := range bundles {
+		if count >= w.config.MaxSimulatBundles {
+			break
+		}
 		state, err := w.chain.StateAt(parent.Root())
 		if err != nil {
 			return nil, err
 		}
 		gasPool := new(core.GasPool).AddGas(header.GasLimit)
 		gasPool.SubGas(params.SystemTxsGas)
+		// should not happen
 		if len(bundle.Txs) == 0 {
 			continue
 		}
-		simmed, err := w.computeBundleGas(bundle, parent, header, state, gasPool, 0)
-
+		count++
+		simmed, err := w.computeBundleGas(bundle, parent, header, state, gasPool, 0, true, true)
 		if err != nil {
 			log.Error("Error computing gas for a bundle", "error", err)
 			continue
@@ -1206,7 +1205,7 @@ func containsHash(arr []common.Hash, match common.Hash) bool {
 
 // Compute the adjusted gas price for a whole bundle
 // Done by calculating all gas spent, adding transfers to the coinbase, and then dividing by gas used
-func (w *worker) computeBundleGas(bundle types.MevBundle, parent *types.Block, header *types.Header, state *state.StateDB, gasPool *core.GasPool, currentTxCount int) (simulatedBundle, error) {
+func (w *worker) computeBundleGas(bundle types.MevBundle, parent *types.Block, header *types.Header, state *state.StateDB, gasPool *core.GasPool, currentTxCount int, prune, pruneGasExceed bool) (simulatedBundle, error) {
 	var totalGasUsed uint64 = 0
 	var tempGasUsed uint64
 	gasFees := new(big.Int)
@@ -1219,13 +1218,21 @@ func (w *worker) computeBundleGas(bundle types.MevBundle, parent *types.Block, h
 
 		receipt, err := core.ApplyTransaction(w.chainConfig, w.chain, &w.coinbase, gasPool, state, header, tx, &tempGasUsed, *w.chain.GetVMConfig())
 		if err != nil {
-			log.Warn("Prune bundle because of err", "id", bundle.UId.String(), "err", err)
-			w.eth.TxPool().PruneBundle(bundle.UId)
+			if prune {
+				if err == core.ErrGasLimitReached && !pruneGasExceed {
+					log.Warn("bundle gas limit exceed", "hash", bundle.Hash.String(), "err", err)
+				} else {
+					log.Warn("Prune bundle because of err", "hash", bundle.Hash.String(), "err", err)
+					w.eth.TxPool().PruneBundle(bundle.Hash)
+				}
+			}
 			return simulatedBundle{}, err
 		}
 		if receipt.Status == types.ReceiptStatusFailed && !containsHash(bundle.RevertingTxHashes, receipt.TxHash) {
-			log.Warn("Prune bundle because of failed tx", "id", bundle.UId.String())
-			w.eth.TxPool().PruneBundle(bundle.UId)
+			if prune {
+				log.Warn("Prune bundle because of failed tx", "hash", bundle.Hash.String())
+				w.eth.TxPool().PruneBundle(bundle.Hash)
+			}
 			return simulatedBundle{}, errors.New("failed tx")
 		}
 
@@ -1235,7 +1242,6 @@ func (w *worker) computeBundleGas(bundle types.MevBundle, parent *types.Block, h
 		gasFeesTx := gasUsed.Mul(gasUsed, tx.GasPrice())
 		coinbaseBalanceAfter := state.GetBalance(w.coinbase)
 		coinbaseDelta := big.NewInt(0).Sub(coinbaseBalanceAfter, coinbaseBalanceBefore)
-		coinbaseDelta.Sub(coinbaseDelta, gasFeesTx)
 		ethSentToCoinbase.Add(ethSentToCoinbase, coinbaseDelta)
 
 		gasFees.Add(gasFees, gasFeesTx)
@@ -1245,8 +1251,10 @@ func (w *worker) computeBundleGas(bundle types.MevBundle, parent *types.Block, h
 
 	mevGasPrice := new(big.Int).Div(totalEth, new(big.Int).SetUint64(totalGasUsed))
 	if mevGasPrice.Cmp(big.NewInt(w.config.MevGasPriceFloor)) < 0 {
-		log.Warn("Prune bundle because of not enough gas price", "id", bundle.UId.String())
-		w.eth.TxPool().PruneBundle(bundle.UId)
+		if prune {
+			log.Warn("Prune bundle because of not enough gas price", "hash", bundle.Hash.String())
+			w.eth.TxPool().PruneBundle(bundle.Hash)
+		}
 		return simulatedBundle{}, errors.New("no enough gas price")
 	}
 
@@ -1263,6 +1271,11 @@ func (w *worker) commitBundle(txs types.Transactions, coinbase common.Address, i
 	// Short circuit if current is nil
 	if w.current == nil {
 		return true
+	}
+
+	if w.current.gasPool == nil {
+		w.current.gasPool = new(core.GasPool).AddGas(w.current.header.GasLimit)
+		w.current.gasPool.SubGas(params.SystemTxsGas)
 	}
 
 	var coalescedLogs []*types.Log

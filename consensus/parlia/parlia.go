@@ -761,7 +761,11 @@ func (p *Parlia) FinalizeAndAssemble(chain consensus.ChainHeaderReader, header *
 	}
 	// should not happen. Once happen, stop the node is better than broadcast the block
 	if header.GasLimit < header.GasUsed {
-		panic("Gas consumption of system txs exceed the gas limit")
+		log.Error("Gas consumption of system txs exceed the gas limit", "limit", header.GasLimit, "used", header.GasUsed)
+		for idx, r := range receipts {
+			log.Error("transaction receipt", "txhash", r.TxHash, "idx", idx, "from", r.ContractAddress, "gasUsed", r.GasUsed)
+		}
+		panic(fmt.Sprintf("Gas consumption of system txs exceed the gas limit, limit %d, used %d", header.GasLimit, header.GasUsed))
 	}
 	header.Root = state.IntermediateRoot(chain.Config().IsEIP158(header.Number))
 	header.UncleHash = types.CalcUncleHash(nil)

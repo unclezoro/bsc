@@ -25,8 +25,6 @@ import (
 	"sync/atomic"
 	"time"
 
-	"github.com/google/uuid"
-
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/crypto"
 	"github.com/ethereum/go-ethereum/rlp"
@@ -537,9 +535,10 @@ func (m Message) CheckNonce() bool       { return m.checkNonce }
 
 type MevBundle struct {
 	Txs               Transactions
-	BlockNumber       *big.Int
+	MaxBlockNumber    *big.Int
 	MinTimestamp      uint64
 	MaxTimestamp      uint64
 	RevertingTxHashes []common.Hash
-	UId               uuid.UUID
+	Hash              common.Hash `rlp:"-"`
+	Price             *big.Int
 }

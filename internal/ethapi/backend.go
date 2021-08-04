@@ -80,7 +80,6 @@ type Backend interface {
 	TxPoolContent() (map[common.Address]types.Transactions, map[common.Address]types.Transactions)
 	Bundles() []*types.MevBundle
 	GetBundleByHash(ctx context.Context, bundleHash common.Hash) *types.MevBundle
-	//GetBundleByHash(ctx context.Context, bundleHash common.Hash) *types.MevBundle
 	SubscribeNewTxsEvent(chan<- core.NewTxsEvent) event.Subscription
 
 	// Filter API

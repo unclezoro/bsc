@@ -122,6 +122,8 @@ var (
 	queuedGauge  = metrics.NewRegisteredGauge("txpool/queued", nil)
 	localGauge   = metrics.NewRegisteredGauge("txpool/local", nil)
 	slotsGauge   = metrics.NewRegisteredGauge("txpool/slots", nil)
+
+	bundleGauge = metrics.NewRegisteredGauge("txpool/bundles", nil)
 )
 
 // TxStatus is the current status of a transaction as seen by the pool.
@@ -562,6 +564,7 @@ func (pool *TxPool) MevBundles(blockNumber *big.Int, blockTimestamp uint64) ([]t
 	}
 
 	pool.mevBundles = bundles
+	bundleGauge.Update(int64(len(pool.mevBundles)))
 	return ret, nil
 }
 
@@ -614,6 +617,7 @@ func (pool *TxPool) AddMevBundle(txs types.Transactions, maxBlockNumber *big.Int
 		delete(pool.mevBundles, leastBundleHash)
 	}
 	pool.mevBundles[hash] = &bundle
+	bundleGauge.Update(int64(len(pool.mevBundles)))
 	return hash, nil
 }
 

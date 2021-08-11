@@ -616,7 +616,6 @@ func (c *ChainConfig) CheckConfigForkOrder() error {
 	var lastFork fork
 	for _, cur := range []fork{
 		{name: "mirrorSyncBlock", block: c.MirrorSyncBlock},
-		{name: "berlinBlock", block: c.BerlinBlock},
 	} {
 		if lastFork.name != "" {
 			// Next one must be higher number

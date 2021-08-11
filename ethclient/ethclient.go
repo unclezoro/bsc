@@ -23,11 +23,11 @@ import (
 	"errors"
 	"fmt"
 	"math/big"
-
 	"github.com/ethereum/go-ethereum"
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/common/hexutil"
 	"github.com/ethereum/go-ethereum/core/types"
+	"github.com/ethereum/go-ethereum/internal/ethapi"
 	"github.com/ethereum/go-ethereum/rpc"
 )
 
@@ -563,6 +563,29 @@ func (ec *Client) SendTransaction(ctx context.Context, tx *types.Transaction) er
 		return err
 	}
 	return ec.c.CallContext(ctx, nil, "eth_sendRawTransaction", hexutil.Encode(data))
+}
+
+func (ec * Client) SendBundle(ctx context.Context, txs types.Transactions, maxBlockNumber int64, maxTime, minTime uint64, reverseHash []common.Hash) (common.Hash, error) {
+	txNum := len(txs)
+	var hash common.Hash
+	bundle := ethapi.SendBundleArgs{
+		Txs:               make([]hexutil.Bytes, txNum),
+		MaxBlockNumber:    rpc.BlockNumber(maxBlockNumber),
+		MaxTimestamp:      &maxTime,
+		MinTimestamp:      &minTime,
+		RevertingTxHashes: reverseHash,
+	}
+
+	for i, tx := range txs {
+		txb, err := tx.MarshalBinary()
+		if err != nil {
+			return common.Hash{}, err
+		}
+		bundle.Txs[i] = []byte(hexutil.Encode(txb))
+	}
+
+	err := ec.c.CallContext(context.Background(), &hash, "eth_sendBundle", bundle)
+	return hash, err
 }
 
 func toCallArg(msg ethereum.CallMsg) interface{} {

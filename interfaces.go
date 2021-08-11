@@ -174,6 +174,10 @@ type TransactionSender interface {
 	SendTransaction(ctx context.Context, tx *types.Transaction) error
 }
 
+type BundleSender interface {
+	SendBundle(ctx context.Context, txs types.Transactions, maxBlockNumber int64, maxTime, minTime uint64,reverseHash []common.Hash) (common.Hash, error)
+}
+
 // GasPricer wraps the gas price oracle, which monitors the blockchain to determine the
 // optimal gas price given current fee market conditions.
 type GasPricer interface {

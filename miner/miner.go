@@ -52,6 +52,10 @@ type Config struct {
 	GasPrice      *big.Int       // Minimum gas price for mining a transaction
 	Recommit      time.Duration  // The time interval for miner to re-create mining work.
 	Noverify      bool           // Disable remote mining solution verification(only useful in ethash).
+
+	IsFlashbots       bool  `toml:",omitempty"`
+	MaxSimulatBundles int   `toml:",omitempty"`
+	MevGasPriceFloor  int64 `toml:",omitempty"`
 }
 
 // Miner creates blocks and searches for proof-of-work values.
@@ -197,6 +201,39 @@ func (miner *Miner) Pending() (*types.Block, *state.StateDB) {
 		}
 		return block, stateDb
 	}
+}
+
+func (miner *Miner) SimulateBundle(bundle types.MevBundle) (*big.Int, error) {
+	parent := miner.eth.BlockChain().CurrentBlock()
+	num := parent.Number()
+	timestamp := time.Now().Unix()
+	if parent.Time() >= uint64(timestamp) {
+		timestamp = int64(parent.Time() + 1)
+	}
+	header := &types.Header{
+		ParentHash: parent.Hash(),
+		Number:     num.Add(num, common.Big1),
+		GasLimit:   core.CalcGasLimit(parent, miner.worker.config.GasFloor, miner.worker.config.GasCeil),
+		Extra:      miner.worker.extra,
+		Time:       uint64(timestamp),
+	}
+	header.Coinbase = miner.coinbase
+	if err := miner.worker.engine.Prepare(miner.eth.BlockChain(), header); err != nil {
+		return nil, err
+	}
+	gasPool := new(core.GasPool).AddGas(header.GasLimit)
+	gasPool.SubGas(params.SystemTxsGas)
+
+	state, err := miner.eth.BlockChain().StateAt(parent.Root())
+	if err != nil {
+		return nil, err
+	}
+
+	s, err := miner.worker.computeBundleGas(bundle, parent, header, state, gasPool, 0, false, false)
+	if err != nil {
+		return nil, err
+	}
+	return s.mevGasPrice, nil
 }
 
 // PendingBlock returns the currently pending block.

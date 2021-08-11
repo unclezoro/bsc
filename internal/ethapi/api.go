@@ -51,7 +51,11 @@ import (
 	"github.com/tyler-smith/go-bip39"
 )
 
-const UnHealthyTimeout = 5 * time.Second
+const (
+	UnHealthyTimeout    = 5 * time.Second
+	MaxBundleBlockDelay = 1200
+	MaxBundleTimeDelay  = 60 * 60 // second
+)
 
 // PublicEthereumAPI provides an API to access Ethereum related information.
 // It offers only methods that operate on public data that is freely available to anyone.
@@ -102,6 +106,14 @@ type PublicTxPoolAPI struct {
 // NewPublicTxPoolAPI creates a new tx pool service that gives information about the transaction pool.
 func NewPublicTxPoolAPI(b Backend) *PublicTxPoolAPI {
 	return &PublicTxPoolAPI{b}
+}
+
+func (s *PublicTxPoolAPI) Bundles() []*types.MevBundle {
+	return s.b.Bundles()
+}
+
+func (s *PublicTxPoolAPI) GetBundleByHash(ctx context.Context, bundleHash common.Hash) *types.MevBundle {
+	return s.b.GetBundleByHash(ctx, bundleHash)
 }
 
 // Content returns the transactions contained within the transaction pool.
@@ -2275,4 +2287,74 @@ func toHexSlice(b [][]byte) []string {
 		r[i] = hexutil.Encode(b[i])
 	}
 	return r
+}
+
+// ---------------------------------------------------------------- FlashBots ----------------------------------------------------------------
+
+// PrivateTxBundleAPI offers an API for accepting bundled transactions
+type PrivateTxBundleAPI struct {
+	b Backend
+}
+
+// NewPrivateTxBundleAPI creates a new Tx Bundle API instance.
+func NewPrivateTxBundleAPI(b Backend) *PrivateTxBundleAPI {
+	return &PrivateTxBundleAPI{b}
+}
+
+// SendBundleArgs represents the arguments for a call.
+type SendBundleArgs struct {
+	Txs               []hexutil.Bytes `json:"txs"`
+	MaxBlockNumber    rpc.BlockNumber `json:"maxBlockNumber"`
+	MinTimestamp      *uint64         `json:"minTimestamp"`
+	MaxTimestamp      *uint64         `json:"maxTimestamp"`
+	RevertingTxHashes []common.Hash   `json:"revertingTxHashes"`
+}
+
+func (s *PrivateTxBundleAPI) BundlePrice(ctx context.Context) (*big.Int, error) {
+	return s.b.BundlePrice()
+}
+
+// SendBundle will add the signed transaction to the transaction pool.
+// The sender is responsible for signing the transaction and using the correct nonce and ensuring validity
+func (s *PrivateTxBundleAPI) SendBundle(ctx context.Context, args SendBundleArgs) (common.Hash, error) {
+	var txs types.Transactions
+	if len(args.Txs) == 0 {
+		return common.Hash{}, errors.New("bundle missing txs")
+	}
+	if args.MaxBlockNumber == 0 && (args.MaxTimestamp == nil || *args.MaxTimestamp == 0) {
+		maxTimeStamp := uint64(time.Now().Unix()) + MaxBundleTimeDelay
+		args.MaxTimestamp = &maxTimeStamp
+	}
+	currentBlock := s.b.CurrentBlock()
+	if args.MaxBlockNumber != 0 && args.MaxBlockNumber.Int64() > int64(currentBlock.NumberU64())+MaxBundleBlockDelay {
+		return common.Hash{}, errors.New("the maxBlockNumber should not be lager than currentBlockNum + 1200")
+	}
+	if args.MaxTimestamp != nil && *args.MaxTimestamp > currentBlock.Time()+uint64(MaxBundleTimeDelay) {
+		return common.Hash{}, errors.New("the maxTimestamp should not be later than currentBlockTimestamp + 1 hour")
+	}
+	if args.MaxTimestamp != nil && args.MinTimestamp != nil && *args.MaxTimestamp != 0 && *args.MinTimestamp != 0 {
+		if *args.MaxTimestamp <= *args.MinTimestamp {
+			return common.Hash{}, errors.New("the maxTimestamp should not be less than minTimestamp")
+		}
+	}
+	if args.MinTimestamp != nil && *args.MinTimestamp > currentBlock.Time()+uint64(MaxBundleTimeDelay) {
+		return common.Hash{}, errors.New("the minTimestamp should not be later than currentBlockTimestamp + 1 hour")
+	}
+	for _, encodedTx := range args.Txs {
+		tx := new(types.Transaction)
+		if err := tx.UnmarshalBinary(encodedTx); err != nil {
+			return common.Hash{}, err
+		}
+		txs = append(txs, tx)
+	}
+
+	var minTimestamp, maxTimestamp uint64
+	if args.MinTimestamp != nil {
+		minTimestamp = *args.MinTimestamp
+	}
+	if args.MaxTimestamp != nil {
+		maxTimestamp = *args.MaxTimestamp
+	}
+
+	return s.b.SendBundle(ctx, txs, args.MaxBlockNumber, minTimestamp, maxTimestamp, args.RevertingTxHashes)
 }

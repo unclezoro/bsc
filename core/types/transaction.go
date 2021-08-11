@@ -535,3 +535,13 @@ func (m Message) Nonce() uint64          { return m.nonce }
 func (m Message) Data() []byte           { return m.data }
 func (m Message) AccessList() AccessList { return m.accessList }
 func (m Message) CheckNonce() bool       { return m.checkNonce }
+
+type MevBundle struct {
+	Txs               Transactions
+	MaxBlockNumber    *big.Int
+	MinTimestamp      uint64
+	MaxTimestamp      uint64
+	RevertingTxHashes []common.Hash
+	Hash              common.Hash `rlp:"-"`
+	Price             *big.Int
+}

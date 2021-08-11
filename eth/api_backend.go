@@ -20,6 +20,7 @@ import (
 	"context"
 	"errors"
 	"math/big"
+	"sort"
 
 	"github.com/ethereum/go-ethereum/accounts"
 	"github.com/ethereum/go-ethereum/common"
@@ -242,6 +243,25 @@ func (b *EthAPIBackend) GetPoolTransactions() (types.Transactions, error) {
 	return txs, nil
 }
 
+func (b *EthAPIBackend) SendBundle(ctx context.Context, txs types.Transactions, maxBlockNumber rpc.BlockNumber, minTimestamp uint64, maxTimestamp uint64, revertingTxHashes []common.Hash) (common.Hash, error) {
+	return b.eth.txPool.AddMevBundle(txs, big.NewInt(maxBlockNumber.Int64()), minTimestamp, maxTimestamp, revertingTxHashes)
+}
+
+func (b *EthAPIBackend) BundlePrice() (*big.Int, error) {
+	bundles := b.eth.txPool.AllMevBundles()
+	if len(bundles) == 0 {
+		return big.NewInt(b.eth.config.Miner.MevGasPriceFloor), nil
+	}
+	sort.SliceStable(bundles, func(i, j int) bool {
+		return bundles[j].Price.Cmp(bundles[i].Price) < 0
+	})
+	idx := len(bundles) / 2
+	if bundles[idx].Price.Cmp(big.NewInt(b.eth.config.Miner.MevGasPriceFloor)) < 0 {
+		return big.NewInt(b.eth.config.Miner.MevGasPriceFloor), nil
+	}
+	return bundles[idx].Price, nil
+}
+
 func (b *EthAPIBackend) GetPoolTransaction(hash common.Hash) *types.Transaction {
 	return b.eth.txPool.Get(hash)
 }
@@ -261,6 +281,15 @@ func (b *EthAPIBackend) Stats() (pending int, queued int) {
 
 func (b *EthAPIBackend) TxPoolContent() (map[common.Address]types.Transactions, map[common.Address]types.Transactions) {
 	return b.eth.TxPool().Content()
+}
+
+func (b *EthAPIBackend) Bundles() []*types.MevBundle {
+	return b.eth.TxPool().AllMevBundles()
+}
+
+func (b *EthAPIBackend) GetBundleByHash(ctx context.Context, bundleHash common.Hash) *types.MevBundle {
+	b.eth.TxPool().AllMevBundles()
+	return b.eth.TxPool().GetMevBundles(bundleHash)
 }
 
 func (b *EthAPIBackend) TxPool() *core.TxPool {

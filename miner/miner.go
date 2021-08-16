@@ -188,19 +188,21 @@ func (miner *Miner) SetRecommitInterval(interval time.Duration) {
 // Pending returns the currently pending block and associated state.
 func (miner *Miner) Pending() (*types.Block, *state.StateDB) {
 	if miner.worker.isRunning() {
-		return miner.worker.pending()
-	} else {
-		// fallback to latest block
-		block := miner.worker.chain.CurrentBlock()
-		if block == nil {
-			return nil, nil
+		pendingBlock, pendingState := miner.worker.pending()
+		if pendingState != nil && pendingBlock != nil {
+			return pendingBlock, pendingState
 		}
-		stateDb, err := miner.worker.chain.StateAt(block.Root())
-		if err != nil {
-			return nil, nil
-		}
-		return block, stateDb
 	}
+	// fallback to latest block
+	block := miner.worker.chain.CurrentBlock()
+	if block == nil {
+		return nil, nil
+	}
+	stateDb, err := miner.worker.chain.StateAt(block.Root())
+	if err != nil {
+		return nil, nil
+	}
+	return block, stateDb
 }
 
 func (miner *Miner) SimulateBundle(bundle types.MevBundle) (*big.Int, error) {
@@ -243,11 +245,13 @@ func (miner *Miner) SimulateBundle(bundle types.MevBundle) (*big.Int, error) {
 // change between multiple method calls
 func (miner *Miner) PendingBlock() *types.Block {
 	if miner.worker.isRunning() {
-		return miner.worker.pendingBlock()
-	} else {
-		// fallback to latest block
-		return miner.worker.chain.CurrentBlock()
+		pendingBlock := miner.worker.pendingBlock()
+		if pendingBlock != nil {
+			return pendingBlock
+		}
 	}
+	// fallback to latest block
+	return miner.worker.chain.CurrentBlock()
 }
 
 func (miner *Miner) SetEtherbase(addr common.Address) {

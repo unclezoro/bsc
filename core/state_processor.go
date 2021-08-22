@@ -17,7 +17,17 @@
 package core
 
 import (
+	"bytes"
+	"errors"
 	"fmt"
+
+	"github.com/ethereum/go-ethereum/log"
+
+	"github.com/ethereum/go-ethereum/core/rawdb"
+
+	"github.com/ethereum/go-ethereum/core/state/snapshot"
+
+	"github.com/ethereum/go-ethereum/rlp"
 
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/consensus"
@@ -47,6 +57,149 @@ func NewStateProcessor(config *params.ChainConfig, bc *BlockChain, engine consen
 		bc:     bc,
 		engine: engine,
 	}
+}
+
+type LightStateProcessor struct {
+	StateProcessor
+}
+
+func (p *LightStateProcessor) Process(block *types.Block, statedb *state.StateDB, cfg vm.Config) (types.Receipts, []*types.Log, uint64, error) {
+	// TODO fetch differ from somewhere else
+	var diffLayer *types.DiffLayer
+	if diffLayer == nil {
+		return p.StateProcessor.Process(block, statedb, cfg)
+	}
+	fullDiffCode := make(map[common.Hash][]byte, len(diffLayer.Codes))
+	diffTries := make(map[common.Address]state.Trie)
+	diffCode := make(map[common.Hash][]byte)
+
+	snapDestructs, snapAccounts, snapStorage, err := statedb.DiffLayerToSnap(diffLayer)
+
+	if err != nil {
+		return nil, nil, 0, err
+	}
+	for _, c := range diffLayer.Codes {
+		// Verify code hash
+		fullDiffCode[c.Hash] = c.Code
+	}
+
+	for des := range snapDestructs {
+		statedb.Trie().TryDelete(des[:])
+	}
+
+	// TODO need improve
+	for diffAccount, blob := range snapAccounts {
+		addrHash := crypto.Keccak256Hash(diffAccount[:])
+		latestAccount, err := snapshot.FullAccount(blob)
+		if err != nil {
+			return nil, nil, 0, err
+		}
+
+		// fetch previous state
+		var previousAccount state.Account
+		enc, err := statedb.Trie().TryGet(diffAccount[:])
+		if err != nil {
+			return nil, nil, 0, err
+		}
+		if len(enc) != 0 {
+			if err := rlp.DecodeBytes(enc, &previousAccount); err != nil {
+				return nil, nil, 0, err
+			}
+		}
+
+		if previousAccount.Nonce == latestAccount.Nonce &&
+			bytes.Equal(previousAccount.CodeHash, latestAccount.CodeHash) &&
+			previousAccount.Balance.Cmp(latestAccount.Balance) == 0 &&
+			previousAccount.Root == common.BytesToHash(latestAccount.Root) {
+			log.Warn("receive redundant account change in diff layer")
+			delete(snapAccounts, diffAccount)
+			delete(snapStorage, diffAccount)
+			continue
+		}
+
+		// update code
+		codeHash := common.BytesToHash(latestAccount.CodeHash)
+		if !bytes.Equal(latestAccount.CodeHash, previousAccount.CodeHash) && len(latestAccount.CodeHash) != 0 {
+			if code, exist := fullDiffCode[codeHash]; exist {
+				if crypto.Keccak256Hash(code) == codeHash {
+					return nil, nil, 0, errors.New("code and codeHash mismatch")
+				}
+				diffCode[codeHash] = code
+			} else {
+				rawCode := rawdb.ReadCode(p.bc.db, codeHash)
+				if len(rawCode) == 0 {
+					return nil, nil, 0, errors.New("missing code in difflayer")
+				}
+			}
+		}
+
+		//update storage
+		latestRoot := common.BytesToHash(latestAccount.Root)
+		if latestRoot != previousAccount.Root && latestRoot != (common.Hash{}) {
+			accountTrie, err := statedb.Database().OpenStorageTrie(addrHash, previousAccount.Root)
+			if err != nil {
+				return nil, nil, 0, err
+			}
+			if storageChange, exist := snapStorage[diffAccount]; exist {
+				for k, v := range storageChange {
+					if len(v) != 0 {
+						accountTrie.TryUpdate([]byte(k), v)
+					} else {
+						accountTrie.TryDelete([]byte(k))
+					}
+				}
+			} else {
+				return nil, nil, 0, errors.New("missing storage change in difflayer")
+			}
+			// check storage root
+			accountRootHash := accountTrie.Hash()
+			if latestRoot != accountRootHash {
+				return nil, nil, 0, errors.New("account storage root mismatch")
+			}
+			diffTries[diffAccount] = accountTrie
+		} else {
+			delete(snapStorage, diffAccount)
+		}
+
+		// update state trie
+		err = statedb.Trie().TryUpdate(diffAccount[:], blob)
+		if err != nil {
+			return nil, nil, 0, err
+		}
+	}
+
+	// remove redundant storage change
+	for account, _ := range snapStorage {
+		if _, exist := snapAccounts[account]; !exist {
+			log.Warn("receive redundant storage change in diff layer")
+			delete(snapStorage, account)
+		}
+	}
+
+	// prune diffLayer
+	if len(fullDiffCode) != len(diffLayer.Codes) {
+		diffLayer.Codes = make([]types.DiffCode, 0, len(diffCode))
+		for hash, code := range diffCode {
+			diffLayer.Codes = append(diffLayer.Codes, types.DiffCode{
+				Hash: hash,
+				Code: code,
+			})
+		}
+	}
+	if len(snapAccounts) != len(diffLayer.Accounts) || len(snapStorage) != len(diffLayer.Storages) {
+		diffLayer.Destructs, diffLayer.Accounts, diffLayer.Storages = statedb.SnapToDiffLayer()
+	}
+	statedb.SetDiff(diffLayer, diffTries, diffCode)
+	statedb.SetSnapData(snapDestructs, snapAccounts, snapStorage)
+
+	var allLogs []*types.Log
+	var gasUsed uint64
+	for _, receipt := range diffLayer.Receipts {
+		allLogs = append(allLogs, receipt.Logs...)
+		gasUsed += receipt.GasUsed
+	}
+
+	return diffLayer.Receipts, allLogs, gasUsed, nil
 }
 
 // Process processes the state changes according to the Ethereum rules by running

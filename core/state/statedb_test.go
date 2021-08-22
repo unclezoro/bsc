@@ -102,7 +102,7 @@ func TestIntermediateLeaks(t *testing.T) {
 	}
 
 	// Commit and cross check the databases.
-	transRoot, err := transState.Commit(false)
+	transRoot, _, err := transState.Commit(false)
 	if err != nil {
 		t.Fatalf("failed to commit transition state: %v", err)
 	}
@@ -110,7 +110,7 @@ func TestIntermediateLeaks(t *testing.T) {
 		t.Errorf("can not commit trie %v to persistent database", transRoot.Hex())
 	}
 
-	finalRoot, err := finalState.Commit(false)
+	finalRoot, _, err := finalState.Commit(false)
 	if err != nil {
 		t.Fatalf("failed to commit final state: %v", err)
 	}
@@ -473,8 +473,8 @@ func (test *snapshotTest) checkEqual(state, checkstate *StateDB) error {
 func TestTouchDelete(t *testing.T) {
 	s := newStateTest()
 	s.state.GetOrNewStateObject(common.Address{})
-	root, _ := s.state.Commit(false)
-	s.state, _ = New(root, s.state.db, s.state.snaps)
+	root, _, _ := s.state.Commit(false)
+	s.state, _ = New(root, s.state.db, s.state.Snaps)
 
 	snapshot := s.state.Snapshot()
 	s.state.AddBalance(common.Address{}, new(big.Int))
@@ -675,8 +675,8 @@ func TestDeleteCreateRevert(t *testing.T) {
 	addr := common.BytesToAddress([]byte("so"))
 	state.SetBalance(addr, big.NewInt(1))
 
-	root, _ := state.Commit(false)
-	state, _ = New(root, state.db, state.snaps)
+	root, _, _ := state.Commit(false)
+	state, _ = New(root, state.db, state.Snaps)
 
 	// Simulate self-destructing in one transaction, then create-reverting in another
 	state.Suicide(addr)
@@ -687,8 +687,8 @@ func TestDeleteCreateRevert(t *testing.T) {
 	state.RevertToSnapshot(id)
 
 	// Commit the entire state and make sure we don't crash and have the correct state
-	root, _ = state.Commit(true)
-	state, _ = New(root, state.db, state.snaps)
+	root, _, _ = state.Commit(true)
+	state, _ = New(root, state.db, state.Snaps)
 
 	if state.getStateObject(addr) != nil {
 		t.Fatalf("self-destructed contract came alive")
@@ -712,7 +712,7 @@ func TestMissingTrieNodes(t *testing.T) {
 		a2 := common.BytesToAddress([]byte("another"))
 		state.SetBalance(a2, big.NewInt(100))
 		state.SetCode(a2, []byte{1, 2, 4})
-		root, _ = state.Commit(false)
+		root, _, _ = state.Commit(false)
 		t.Logf("root: %x", root)
 		// force-flush
 		state.Database().TrieDB().Cap(0)
@@ -736,7 +736,7 @@ func TestMissingTrieNodes(t *testing.T) {
 	}
 	// Modify the state
 	state.SetBalance(addr, big.NewInt(2))
-	root, err := state.Commit(false)
+	root, _, err := state.Commit(false)
 	if err == nil {
 		t.Fatalf("expected error, got root :%x", root)
 	}

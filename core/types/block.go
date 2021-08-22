@@ -366,3 +366,30 @@ func (b *Block) Hash() common.Hash {
 }
 
 type Blocks []*Block
+
+// journalDestruct is an account deletion entry in a diffLayer's disk journal.
+type DiffLayer struct {
+	Hash      common.Hash
+	StateRoot common.Hash
+	Receipts  Receipts // Receipts are duplicated stored to simplify the logic
+	Codes     []DiffCode
+	Destructs []common.Address
+	Accounts  []DiffAccount
+	Storages  []DiffStorage
+}
+
+type DiffCode struct {
+	Hash common.Hash
+	Code []byte
+}
+
+type DiffAccount struct {
+	Account common.Address
+	Blob    []byte
+}
+
+type DiffStorage struct {
+	Account common.Address
+	Keys    []string
+	Vals    [][]byte
+}

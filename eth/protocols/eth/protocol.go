@@ -32,6 +32,7 @@ import (
 const (
 	ETH65 = 65
 	ETH66 = 66
+	ETH67 = 67
 )
 
 // ProtocolName is the official short name of the `eth` protocol used during
@@ -40,11 +41,11 @@ const ProtocolName = "eth"
 
 // ProtocolVersions are the supported versions of the `eth` protocol (first
 // is primary).
-var ProtocolVersions = []uint{ETH66, ETH65}
+var ProtocolVersions = []uint{ETH66, ETH65, ETH67}
 
 // protocolLengths are the number of implemented message corresponding to
 // different protocol versions.
-var protocolLengths = map[uint]uint64{ETH66: 17, ETH65: 17}
+var protocolLengths = map[uint]uint64{ETH66: 17, ETH65: 17, ETH67: 19}
 
 // maxMessageSize is the maximum cap on the size of a protocol message.
 const maxMessageSize = 10 * 1024 * 1024
@@ -68,6 +69,10 @@ const (
 	NewPooledTransactionHashesMsg = 0x08
 	GetPooledTransactionsMsg      = 0x09
 	PooledTransactionsMsg         = 0x0a
+
+	// Protocol messages in eth/67
+	GetDiffLayerMsg = 0x20
+	DiffLayerMsg    = 0x21
 )
 
 var (
@@ -282,6 +287,33 @@ type ReceiptsPacket66 struct {
 	ReceiptsPacket
 }
 
+type GetDiffLayersPacket []common.Hash
+
+type GetDiffLayersPacket67 struct {
+	RequestId uint64
+	GetDiffLayersPacket
+}
+
+type DiffLayersPacket []rlp.RawValue
+
+func (p *DiffLayersPacket) Unpack() ([]*types.DiffLayer, error) {
+	diffLayer := make([]*types.DiffLayer, 0, len(*p))
+	for _, rawData := range *p {
+		var diff types.DiffLayer
+		err := rlp.DecodeBytes(rawData, &diff)
+		if err != nil {
+			return nil, fmt.Errorf("%w: diff layer %v", errDecode, err)
+		}
+		diffLayer = append(diffLayer, &diff)
+	}
+	return diffLayer, nil
+}
+
+type DiffLayersPacket67 struct {
+	RequestId uint64
+	DiffLayersPacket
+}
+
 // ReceiptsRLPPacket is used for receipts, when we already have it encoded
 type ReceiptsRLPPacket []rlp.RawValue
 
@@ -365,3 +397,9 @@ func (*GetPooledTransactionsPacket) Kind() byte   { return GetPooledTransactions
 
 func (*PooledTransactionsPacket) Name() string { return "PooledTransactions" }
 func (*PooledTransactionsPacket) Kind() byte   { return PooledTransactionsMsg }
+
+func (*GetDiffLayersPacket) Name() string { return "GetDiffLayers" }
+func (*GetDiffLayersPacket) Kind() byte   { return GetDiffLayerMsg }
+
+func (*DiffLayersPacket) Name() string { return "DiffLayers" }
+func (*DiffLayersPacket) Kind() byte   { return DiffLayerMsg }

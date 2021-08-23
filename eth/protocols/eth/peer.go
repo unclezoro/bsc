@@ -374,6 +374,14 @@ func (p *Peer) ReplyBlockBodiesRLP(id uint64, bodies []rlp.RawValue) error {
 	})
 }
 
+func (p *Peer) ReplyDiffLayersRLP(id uint64, diffLayers []rlp.RawValue) error {
+	// Not packed into BlockBodiesPacket to avoid RLP decoding
+	return p2p.Send(p.rw, DiffLayerMsg, DiffLayersPacket67{
+		RequestId:        id,
+		DiffLayersPacket: diffLayers,
+	})
+}
+
 // SendNodeDataRLP sends a batch of arbitrary internal data, corresponding to the
 // hashes requested.
 func (p *Peer) SendNodeData(data [][]byte) error {

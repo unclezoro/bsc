@@ -20,24 +20,21 @@ import (
 	"bytes"
 	"errors"
 	"fmt"
-
-	"github.com/ethereum/go-ethereum/log"
-
-	"github.com/ethereum/go-ethereum/core/rawdb"
-
-	"github.com/ethereum/go-ethereum/core/state/snapshot"
-
-	"github.com/ethereum/go-ethereum/rlp"
+	"math/big"
 
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/consensus"
 	"github.com/ethereum/go-ethereum/consensus/misc"
+	"github.com/ethereum/go-ethereum/core/rawdb"
 	"github.com/ethereum/go-ethereum/core/state"
+	"github.com/ethereum/go-ethereum/core/state/snapshot"
 	"github.com/ethereum/go-ethereum/core/systemcontracts"
 	"github.com/ethereum/go-ethereum/core/types"
 	"github.com/ethereum/go-ethereum/core/vm"
 	"github.com/ethereum/go-ethereum/crypto"
+	"github.com/ethereum/go-ethereum/log"
 	"github.com/ethereum/go-ethereum/params"
+	"github.com/ethereum/go-ethereum/rlp"
 )
 
 // StateProcessor is a basic Processor, which takes care of transitioning
@@ -69,17 +66,17 @@ func (p *LightStateProcessor) Process(block *types.Block, statedb *state.StateDB
 	if diffLayer == nil {
 		return p.StateProcessor.Process(block, statedb, cfg)
 	}
+	statedb.MarkDiffEnabled()
 	fullDiffCode := make(map[common.Hash][]byte, len(diffLayer.Codes))
 	diffTries := make(map[common.Address]state.Trie)
 	diffCode := make(map[common.Hash][]byte)
 
 	snapDestructs, snapAccounts, snapStorage, err := statedb.DiffLayerToSnap(diffLayer)
-
 	if err != nil {
 		return nil, nil, 0, err
 	}
+
 	for _, c := range diffLayer.Codes {
-		// Verify code hash
 		fullDiffCode[c.Hash] = c.Code
 	}
 
@@ -87,7 +84,7 @@ func (p *LightStateProcessor) Process(block *types.Block, statedb *state.StateDB
 		statedb.Trie().TryDelete(des[:])
 	}
 
-	// TODO need improve
+	// TODO need improve, do it concurrently
 	for diffAccount, blob := range snapAccounts {
 		addrHash := crypto.Keccak256Hash(diffAccount[:])
 		latestAccount, err := snapshot.FullAccount(blob)
@@ -106,7 +103,20 @@ func (p *LightStateProcessor) Process(block *types.Block, statedb *state.StateDB
 				return nil, nil, 0, err
 			}
 		}
+		if latestAccount.Balance == nil {
+			latestAccount.Balance = new(big.Int)
+		}
+		if previousAccount.Balance == nil {
+			previousAccount.Balance = new(big.Int)
+		}
+		if previousAccount.Root == (common.Hash{}) {
+			previousAccount.Root = types.EmptyRootHash
+		}
+		if len(previousAccount.CodeHash) == 0 {
+			previousAccount.CodeHash = types.EmptyCodeHash
+		}
 
+		// skip no change account
 		if previousAccount.Nonce == latestAccount.Nonce &&
 			bytes.Equal(previousAccount.CodeHash, latestAccount.CodeHash) &&
 			previousAccount.Balance.Cmp(latestAccount.Balance) == 0 &&
@@ -119,7 +129,8 @@ func (p *LightStateProcessor) Process(block *types.Block, statedb *state.StateDB
 
 		// update code
 		codeHash := common.BytesToHash(latestAccount.CodeHash)
-		if !bytes.Equal(latestAccount.CodeHash, previousAccount.CodeHash) && len(latestAccount.CodeHash) != 0 {
+		if !bytes.Equal(latestAccount.CodeHash, previousAccount.CodeHash) &&
+			!bytes.Equal(latestAccount.CodeHash, types.EmptyCodeHash) {
 			if code, exist := fullDiffCode[codeHash]; exist {
 				if crypto.Keccak256Hash(code) == codeHash {
 					return nil, nil, 0, errors.New("code and codeHash mismatch")
@@ -135,7 +146,7 @@ func (p *LightStateProcessor) Process(block *types.Block, statedb *state.StateDB
 
 		//update storage
 		latestRoot := common.BytesToHash(latestAccount.Root)
-		if latestRoot != previousAccount.Root && latestRoot != (common.Hash{}) {
+		if latestRoot != previousAccount.Root && latestRoot != types.EmptyRootHash {
 			accountTrie, err := statedb.Database().OpenStorageTrie(addrHash, previousAccount.Root)
 			if err != nil {
 				return nil, nil, 0, err
@@ -161,8 +172,18 @@ func (p *LightStateProcessor) Process(block *types.Block, statedb *state.StateDB
 			delete(snapStorage, diffAccount)
 		}
 
-		// update state trie
-		err = statedb.Trie().TryUpdate(diffAccount[:], blob)
+		// can't trust the blob, need encode by our-self.
+		latestStateAccount := state.Account{
+			Nonce:    latestAccount.Nonce,
+			Balance:  latestAccount.Balance,
+			Root:     common.BytesToHash(latestAccount.Root),
+			CodeHash: latestAccount.CodeHash,
+		}
+		bz, err := rlp.EncodeToBytes(&latestStateAccount)
+		if err != nil {
+			return nil, nil, 0, err
+		}
+		err = statedb.Trie().TryUpdate(diffAccount[:], bz)
 		if err != nil {
 			return nil, nil, 0, err
 		}
@@ -176,7 +197,7 @@ func (p *LightStateProcessor) Process(block *types.Block, statedb *state.StateDB
 		}
 	}
 
-	// prune diffLayer
+	// remove redundant code
 	if len(fullDiffCode) != len(diffLayer.Codes) {
 		diffLayer.Codes = make([]types.DiffCode, 0, len(diffCode))
 		for hash, code := range diffCode {

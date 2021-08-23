@@ -24,10 +24,9 @@ import (
 	"sync"
 	"sync/atomic"
 
-	"github.com/ethereum/go-ethereum/crypto"
-
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/core/rawdb"
+	"github.com/ethereum/go-ethereum/crypto"
 	"github.com/ethereum/go-ethereum/ethdb"
 	"github.com/ethereum/go-ethereum/log"
 	"github.com/ethereum/go-ethereum/metrics"
@@ -342,8 +341,8 @@ func (t *Tree) Update(blockRoot common.Hash, parentRoot common.Hash, destructs m
 		return fmt.Errorf("parent [%#x] snapshot missing", parentRoot)
 	}
 
-	hashdestructs, hashAccounts, hashStorage := transformSnap(destructs, accounts, storage)
-	snap := parent.(snapshot).Update(blockRoot, hashdestructs, hashAccounts, hashStorage)
+	hashDestructs, hashAccounts, hashStorage := transformSnapData(destructs, accounts, storage)
+	snap := parent.(snapshot).Update(blockRoot, hashDestructs, hashAccounts, hashStorage)
 
 	// Save the new snapshot for later
 	t.lock.Lock()
@@ -841,8 +840,10 @@ func (t *Tree) DiskRoot() common.Hash {
 	return t.diskRoot()
 }
 
-// TODO need improve
-func transformSnap(destructs map[common.Address]struct{}, accounts map[common.Address][]byte, storage map[common.Address]map[string][]byte) (map[common.Hash]struct{}, map[common.Hash][]byte, map[common.Hash]map[common.Hash][]byte) {
+// TODO we can further improve it when the set is very large
+func transformSnapData(destructs map[common.Address]struct{}, accounts map[common.Address][]byte,
+	storage map[common.Address]map[string][]byte) (map[common.Hash]struct{}, map[common.Hash][]byte,
+	map[common.Hash]map[common.Hash][]byte) {
 	hasher := crypto.NewKeccakState()
 	hashDestructs := make(map[common.Hash]struct{}, len(destructs))
 	hashAccounts := make(map[common.Hash][]byte, len(accounts))

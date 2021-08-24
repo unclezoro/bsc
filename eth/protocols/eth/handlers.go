@@ -174,26 +174,6 @@ func answerGetBlockBodiesQuery(backend Backend, query GetBlockBodiesPacket, peer
 	return bodies
 }
 
-func answerDiffLayersQuery(backend Backend, query GetDiffLayersPacket) []rlp.RawValue {
-	// Gather blocks until the fetch or network limits is reached
-	var (
-		bytes      int
-		diffLayers []rlp.RawValue
-	)
-	// Need avoid transfer huge package
-	for lookups, hash := range query {
-		if bytes >= softResponseLimit || len(diffLayers) >= maxDiffLayerServe ||
-			lookups >= 2*maxDiffLayerServe {
-			break
-		}
-		if data := backend.Chain().GetDiffLayerRLP(hash); len(data) != 0 {
-			diffLayers = append(diffLayers, data)
-			bytes += len(data)
-		}
-	}
-	return diffLayers
-}
-
 func handleGetNodeData(backend Backend, msg Decoder, peer *Peer) error {
 	// Decode the trie node data retrieval message
 	var query GetNodeDataPacket
@@ -537,23 +517,4 @@ func handlePooledTransactions66(backend Backend, msg Decoder, peer *Peer) error 
 	requestTracker.Fulfil(peer.id, peer.version, PooledTransactionsMsg, txs.RequestId)
 
 	return backend.Handle(peer, &txs.PooledTransactionsPacket)
-}
-
-func handleGetDiffLayerMsg(backend Backend, msg Decoder, peer *Peer) error {
-	var query GetDiffLayersPacket67
-	if err := msg.Decode(&query); err != nil {
-		return fmt.Errorf("%w: message %v: %v", errDecode, msg, err)
-	}
-	response := answerDiffLayersQuery(backend, query.GetDiffLayersPacket)
-	return peer.ReplyDiffLayersRLP(query.RequestId, response)
-}
-
-func handleDiffLayerMsg(backend Backend, msg Decoder, peer *Peer) error {
-	var diffLayerPacket DiffLayersPacket67
-	if err := msg.Decode(&diffLayerPacket); err != nil {
-		return fmt.Errorf("%w: message %v: %v", errDecode, msg, err)
-	}
-	requestTracker.Fulfil(peer.id, peer.version, DiffLayerMsg, diffLayerPacket.RequestId)
-
-	return backend.Handle(peer, &diffLayerPacket.DiffLayersPacket)
 }

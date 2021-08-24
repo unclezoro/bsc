@@ -98,13 +98,6 @@ func (h *ethHandler) Handle(peer *eth.Peer, packet eth.Packet) error {
 
 	case *eth.PooledTransactionsPacket:
 		return h.txFetcher.Enqueue(peer.ID(), *packet, true)
-	case *eth.DiffLayersPacket:
-		diffs, err := packet.Unpack()
-		if err != nil {
-			return err
-		}
-		// TODO handle diffs here
-		fmt.Println(diffs)
 	default:
 		return fmt.Errorf("unexpected eth packet type: %T", packet)
 	}

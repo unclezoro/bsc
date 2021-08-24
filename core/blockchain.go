@@ -200,7 +200,7 @@ type BlockChain struct {
 	txLookupCache     *lru.Cache     // Cache for the most recent transaction lookup data.
 	futureBlocks      *lru.Cache     // future blocks are blocks added for later processing
 	diffLayerCache    *lru.Cache     // Cache for the diffLayers
-	diffLayerRLPCache *lru.Cache     //Cache for the rlp encoded diffLayers
+	diffLayerRLPCache *lru.Cache     // Cache for the rlp encoded diffLayers
 	diffQueue         *prque.Prque   // A Priority queue to store recent diff layer
 
 	quit          chan struct{}  // blockchain quit channel

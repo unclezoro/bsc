@@ -24,6 +24,8 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/ethereum/go-ethereum/eth/protocols/diff"
+
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/core"
 	"github.com/ethereum/go-ethereum/core/forkid"
@@ -225,7 +227,7 @@ func newHandler(config *handlerConfig) (*handler, error) {
 		}
 		return n, err
 	}
-	h.blockFetcher = fetcher.NewBlockFetcher(false, nil, h.chain.GetBlockByHash, validator, h.BroadcastBlock, heighter, nil, inserter, h.removePeer)
+	h.blockFetcher = fetcher.NewBlockFetcher(false, config.LightSync, nil, h.chain.GetBlockByHash, validator, h.BroadcastBlock, heighter, nil, inserter, h.removePeer)
 
 	fetchTx := func(peer string, hashes []common.Hash) error {
 		p := h.peers.peer(peer)
@@ -247,6 +249,11 @@ func (h *handler) runEthPeer(peer *eth.Peer, handler eth.Handler) error {
 	snap, err := h.peers.waitSnapExtension(peer)
 	if err != nil {
 		peer.Log().Error("Snapshot extension barrier failed", "err", err)
+		return err
+	}
+	diff, err := h.peers.waitDiffExtension(peer)
+	if err != nil {
+		peer.Log().Error("Diff extension barrier failed", "err", err)
 		return err
 	}
 	// TODO(karalabe): Not sure why this is needed
@@ -289,7 +296,7 @@ func (h *handler) runEthPeer(peer *eth.Peer, handler eth.Handler) error {
 	peer.Log().Debug("Ethereum peer connected", "name", peer.Name())
 
 	// Register the peer locally
-	if err := h.peers.registerPeer(peer, snap); err != nil {
+	if err := h.peers.registerPeer(peer, snap, diff); err != nil {
 		peer.Log().Error("Ethereum peer registration failed", "err", err)
 		return err
 	}
@@ -355,6 +362,21 @@ func (h *handler) runSnapExtension(peer *snap.Peer, handler snap.Handler) error 
 
 	if err := h.peers.registerSnapExtension(peer); err != nil {
 		peer.Log().Error("Snapshot extension registration failed", "err", err)
+		return err
+	}
+	return handler(peer)
+}
+
+// runDiffExtension registers a `diff` peer into the joint eth/diff peerset and
+// starts handling inbound messages. As `diff` is only a satellite protocol to
+// `eth`, all subsystem registrations and lifecycle management will be done by
+// the main `eth` handler to prevent strange races.
+func (h *handler) runDiffExtension(peer *diff.Peer, handler diff.Handler) error {
+	h.peerWG.Add(1)
+	defer h.peerWG.Done()
+
+	if err := h.peers.registerDiffExtension(peer); err != nil {
+		peer.Log().Error("Diff extension registration failed", "err", err)
 		return err
 	}
 	return handler(peer)

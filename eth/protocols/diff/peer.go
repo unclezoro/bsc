@@ -40,6 +40,10 @@ func (p *Peer) Version() uint {
 	return p.version
 }
 
+func (p *Peer) LightSync() bool {
+	return p.lightSync
+}
+
 // Log overrides the P2P logget with the higher level one containing only the id.
 func (p *Peer) Log() log.Logger {
 	return p.logger

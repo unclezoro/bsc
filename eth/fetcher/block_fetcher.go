@@ -157,7 +157,8 @@ func (inject *blockOrHeaderInject) hash() common.Hash {
 // BlockFetcher is responsible for accumulating block announcements from various peers
 // and scheduling them for retrieval.
 type BlockFetcher struct {
-	light bool // The indicator whether it's a light fetcher or normal one.
+	light     bool // The indicator whether it's a light fetcher or normal one.
+	diffLight bool
 
 	// Various event channels
 	notify chan *blockAnnounce
@@ -202,9 +203,10 @@ type BlockFetcher struct {
 }
 
 // NewBlockFetcher creates a block fetcher to retrieve blocks based on hash announcements.
-func NewBlockFetcher(light bool, getHeader HeaderRetrievalFn, getBlock blockRetrievalFn, verifyHeader headerVerifierFn, broadcastBlock blockBroadcasterFn, chainHeight chainHeightFn, insertHeaders headersInsertFn, insertChain chainInsertFn, dropPeer peerDropFn) *BlockFetcher {
+func NewBlockFetcher(light, diffLight bool, getHeader HeaderRetrievalFn, getBlock blockRetrievalFn, verifyHeader headerVerifierFn, broadcastBlock blockBroadcasterFn, chainHeight chainHeightFn, insertHeaders headersInsertFn, insertChain chainInsertFn, dropPeer peerDropFn) *BlockFetcher {
 	return &BlockFetcher{
 		light:          light,
+		diffLight:      diffLight,
 		notify:         make(chan *blockAnnounce),
 		inject:         make(chan *blockOrHeaderInject),
 		headerFilter:   make(chan chan *headerFilterTask),
@@ -481,6 +483,7 @@ func (f *BlockFetcher) loop() {
 
 				// Create a closure of the fetch and schedule in on a new thread
 				fetchHeader, hashes := f.fetching[hashes[0]].fetchHeader, hashes
+
 				gopool.Submit(func() {
 					if f.fetchingHook != nil {
 						f.fetchingHook(hashes)

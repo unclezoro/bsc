@@ -55,7 +55,7 @@ func (h *diffHandler) Handle(peer *diff.Peer, packet diff.Packet) error {
 	// data packet for the local node to consume.
 	switch packet := packet.(type) {
 	case *diff.DiffLayersPacket:
-		diffs, err := packet.Unpack()
+		diffs, _, err := packet.Unpack()
 		if err != nil {
 			return err
 		}

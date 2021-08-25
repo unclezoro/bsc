@@ -374,6 +374,7 @@ type Blocks []*Block
 
 // journalDestruct is an account deletion entry in a diffLayer's disk journal.
 type DiffLayer struct {
+	DiffHash  common.Hash `rlp:"_"`
 	Hash      common.Hash
 	StateRoot common.Hash
 	Receipts  Receipts // Receipts are duplicated stored to simplify the logic

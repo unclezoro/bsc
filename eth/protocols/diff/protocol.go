@@ -20,6 +20,8 @@ import (
 	"errors"
 	"fmt"
 
+	"golang.org/x/crypto/sha3"
+
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/core/types"
 	"github.com/ethereum/go-ethereum/rlp"
@@ -71,17 +73,28 @@ type GetDiffLayersPacket struct {
 	BlockHashes []common.Hash
 }
 
-func (p *DiffLayersPacket) Unpack() ([]*types.DiffLayer, error) {
-	diffLayer := make([]*types.DiffLayer, 0, len(*p))
+func (p *DiffLayersPacket) Unpack() ([]*types.DiffLayer, []common.Hash, error) {
+	diffLayers := make([]*types.DiffLayer, 0, len(*p))
+	diffHashes := make([]common.Hash, 0, len(*p))
+	hasher := sha3.NewLegacyKeccak256()
 	for _, rawData := range *p {
 		var diff types.DiffLayer
 		err := rlp.DecodeBytes(rawData, &diff)
 		if err != nil {
-			return nil, fmt.Errorf("%w: diff layer %v", errDecode, err)
+			return nil, nil, fmt.Errorf("%w: diff layer %v", errDecode, err)
 		}
-		diffLayer = append(diffLayer, &diff)
+		diffLayers = append(diffLayers, &diff)
+		_, err = hasher.Write(rawData)
+		if err != nil {
+			return nil, nil, err
+		}
+		var diffHash common.Hash
+		hasher.Sum(diffHash[:0])
+		hasher.Reset()
+		diff.DiffHash = diffHash
+		diffHashes = append(diffHashes)
 	}
-	return diffLayer, nil
+	return diffLayers, diffHashes, nil
 }
 
 type DiffCapPacket struct {

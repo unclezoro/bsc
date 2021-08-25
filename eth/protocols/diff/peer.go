@@ -1,6 +1,9 @@
 package diff
 
 import (
+	"math/rand"
+
+	"github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/log"
 	"github.com/ethereum/go-ethereum/p2p"
 )
@@ -47,4 +50,16 @@ func (p *Peer) LightSync() bool {
 // Log overrides the P2P logget with the higher level one containing only the id.
 func (p *Peer) Log() log.Logger {
 	return p.logger
+}
+
+// RequestDiffLayers fetches a batch of diff layers corresponding to the hashes
+// specified.
+func (p *Peer) RequestDiffLayers(hashes []common.Hash) error {
+	id := rand.Uint64()
+
+	requestTracker.Track(p.id, p.version, GetDiffLayerMsg, DiffLayerMsg, id)
+	return p2p.Send(p.rw, GetDiffLayerMsg, GetDiffLayersPacket{
+		RequestId:   id,
+		BlockHashes: hashes,
+	})
 }

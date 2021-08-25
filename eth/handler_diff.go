@@ -17,6 +17,8 @@
 package eth
 
 import (
+	"fmt"
+
 	"github.com/ethereum/go-ethereum/core"
 	"github.com/ethereum/go-ethereum/eth/protocols/diff"
 	"github.com/ethereum/go-ethereum/p2p/enode"
@@ -49,6 +51,25 @@ func (h *diffHandler) PeerInfo(id enode.ID) interface{} {
 // Handle is invoked from a peer's message handler when it receives a new remote
 // message that the handler couldn't consume and serve itself.
 func (h *diffHandler) Handle(peer *diff.Peer, packet diff.Packet) error {
-	// TODO implement package handler here
+	// DeliverSnapPacket is invoked from a peer's message handler when it transmits a
+	// data packet for the local node to consume.
+	switch packet := packet.(type) {
+	case *diff.DiffLayersPacket:
+		diffs, err := packet.Unpack()
+		if err != nil {
+			return err
+		}
+		for _, d := range diffs {
+			if d != nil {
+				if err := d.Validate(); err != nil {
+					return err
+				}
+			}
+		}
+		// TODO, we need rateLimit here
+
+	default:
+		return fmt.Errorf("unexpected snap packet type: %T", packet)
+	}
 	return nil
 }

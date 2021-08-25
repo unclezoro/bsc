@@ -19,6 +19,7 @@ package types
 
 import (
 	"encoding/binary"
+	"errors"
 	"fmt"
 	"io"
 	"math/big"
@@ -380,6 +381,18 @@ type DiffLayer struct {
 	Destructs []common.Address
 	Accounts  []DiffAccount
 	Storages  []DiffStorage
+}
+
+func (d *DiffLayer) Validate() error {
+	if d.Hash == (common.Hash{}) || d.StateRoot == (common.Hash{}) {
+		return errors.New("hash can't be empty")
+	}
+	for _, storage := range d.Storages {
+		if len(storage.Keys) != len(storage.Vals) {
+			return errors.New("the length of keys and values mismatch in storage")
+		}
+	}
+	return nil
 }
 
 type DiffCode struct {

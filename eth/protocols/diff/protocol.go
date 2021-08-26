@@ -75,7 +75,6 @@ type GetDiffLayersPacket struct {
 
 func (p *DiffLayersPacket) Unpack() ([]*types.DiffLayer, error) {
 	diffLayers := make([]*types.DiffLayer, 0, len(*p))
-	diffHashes := make([]common.Hash, 0, len(*p))
 	hasher := sha3.NewLegacyKeccak256()
 	for _, rawData := range *p {
 		var diff types.DiffLayer
@@ -92,7 +91,6 @@ func (p *DiffLayersPacket) Unpack() ([]*types.DiffLayer, error) {
 		hasher.Sum(diffHash[:0])
 		hasher.Reset()
 		diff.DiffHash = diffHash
-		diffHashes = append(diffHashes)
 	}
 	return diffLayers, nil
 }

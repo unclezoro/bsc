@@ -39,7 +39,7 @@ import (
 	"github.com/ethereum/go-ethereum/rlp"
 )
 
-const fullProcessCheck = 21
+const fullProcessCheck = 21 // On light sync mode, will do full process every fullProcessCheck randomly
 
 // StateProcessor is a basic Processor, which takes care of transitioning
 // state from one point to another.
@@ -66,7 +66,6 @@ type LightStateProcessor struct {
 }
 
 func NewLightStateProcessor(config *params.ChainConfig, bc *BlockChain, engine consensus.Engine) *LightStateProcessor {
-
 	randomGenerator := rand.New(rand.NewSource(int64(time.Now().Nanosecond())))
 	return &LightStateProcessor{
 		randomGenerator: randomGenerator,
@@ -77,7 +76,11 @@ func NewLightStateProcessor(config *params.ChainConfig, bc *BlockChain, engine c
 func (p *LightStateProcessor) Process(block *types.Block, statedb *state.StateDB, cfg vm.Config) (*state.StateDB, types.Receipts, []*types.Log, uint64, error) {
 	// random fallback to full process
 	if check := p.randomGenerator.Int63n(fullProcessCheck); check != 0 {
-		diffLayer := p.bc.GetDiffLayer(block)
+		var pid string
+		if peer, ok := block.ReceivedFrom.(PeerIDer); ok {
+			pid = peer.ID()
+		}
+		diffLayer := p.bc.GetDiffLayer(block.Hash(), pid)
 		if diffLayer != nil {
 			receipts, logs, gasUsed, err := p.LightProcess(diffLayer, block, statedb, cfg)
 			if err == nil {
@@ -101,7 +104,7 @@ func (p *LightStateProcessor) Process(block *types.Block, statedb *state.StateDB
 }
 
 func (p *LightStateProcessor) LightProcess(diffLayer *types.DiffLayer, block *types.Block, statedb *state.StateDB, cfg vm.Config) (types.Receipts, []*types.Log, uint64, error) {
-	statedb.MarkDiffEnabled()
+	statedb.MarkLightProcessed()
 	fullDiffCode := make(map[common.Hash][]byte, len(diffLayer.Codes))
 	diffTries := make(map[common.Address]state.Trie)
 	diffCode := make(map[common.Hash][]byte)
@@ -167,7 +170,7 @@ func (p *LightStateProcessor) LightProcess(diffLayer *types.DiffLayer, block *ty
 		if !bytes.Equal(latestAccount.CodeHash, previousAccount.CodeHash) &&
 			!bytes.Equal(latestAccount.CodeHash, types.EmptyCodeHash) {
 			if code, exist := fullDiffCode[codeHash]; exist {
-				if crypto.Keccak256Hash(code) == codeHash {
+				if crypto.Keccak256Hash(code) != codeHash {
 					return nil, nil, 0, errors.New("code and codeHash mismatch")
 				}
 				diffCode[codeHash] = code
@@ -223,9 +226,17 @@ func (p *LightStateProcessor) LightProcess(diffLayer *types.DiffLayer, block *ty
 			return nil, nil, 0, err
 		}
 	}
+	var allLogs []*types.Log
+	var gasUsed uint64
+	for _, receipt := range diffLayer.Receipts {
+		allLogs = append(allLogs, receipt.Logs...)
+		gasUsed += receipt.GasUsed
+	}
 
-	if root := statedb.IntermediateRoot(p.bc.Config().IsEIP158(block.Number())); block.Root() != root {
-		return nil, nil, 0, fmt.Errorf("invalid merkle root (remote: %x local: %x)", block.Root(), root)
+	// Do validate in advance so that we can fall back to full process
+	if err := p.bc.validator.ValidateState(block, statedb, diffLayer.Receipts, gasUsed); err != nil {
+		log.Error("validate state failed during light sync", "error", err)
+		return nil, nil, 0, err
 	}
 
 	// remove redundant storage change
@@ -246,18 +257,12 @@ func (p *LightStateProcessor) LightProcess(diffLayer *types.DiffLayer, block *ty
 			})
 		}
 	}
+
+	statedb.SetSnapData(snapDestructs, snapAccounts, snapStorage)
 	if len(snapAccounts) != len(diffLayer.Accounts) || len(snapStorage) != len(diffLayer.Storages) {
 		diffLayer.Destructs, diffLayer.Accounts, diffLayer.Storages = statedb.SnapToDiffLayer()
 	}
 	statedb.SetDiff(diffLayer, diffTries, diffCode)
-	statedb.SetSnapData(snapDestructs, snapAccounts, snapStorage)
-
-	var allLogs []*types.Log
-	var gasUsed uint64
-	for _, receipt := range diffLayer.Receipts {
-		allLogs = append(allLogs, receipt.Logs...)
-		gasUsed += receipt.GasUsed
-	}
 
 	return diffLayer.Receipts, allLogs, gasUsed, nil
 }

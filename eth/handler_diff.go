@@ -66,7 +66,6 @@ func (h *diffHandler) Handle(peer *diff.Peer, packet diff.Packet) error {
 				}
 			}
 		}
-		// TODO, we need rateLimit here
 		for _, diff := range diffs {
 			err := h.chain.HandleDiffLayer(diff, peer.ID())
 			if err != nil {
@@ -75,7 +74,7 @@ func (h *diffHandler) Handle(peer *diff.Peer, packet diff.Packet) error {
 		}
 
 	default:
-		return fmt.Errorf("unexpected snap packet type: %T", packet)
+		return fmt.Errorf("unexpected diff packet type: %T", packet)
 	}
 	return nil
 }

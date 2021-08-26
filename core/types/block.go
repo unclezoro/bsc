@@ -377,6 +377,7 @@ type DiffLayer struct {
 	DiffHash  common.Hash `rlp:"_"`
 	Hash      common.Hash
 	StateRoot common.Hash
+	Number    uint64
 	Receipts  Receipts // Receipts are duplicated stored to simplify the logic
 	Codes     []DiffCode
 	Destructs []common.Address

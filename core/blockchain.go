@@ -218,7 +218,7 @@ type BlockChain struct {
 
 	// untrusted diff layers
 	diffMux               sync.RWMutex
-	receivedDiffLayers    map[common.Hash]map[common.Hash]*types.DiffLayer // map[blockHash] map[DiffHash]Diff
+	blockHashToDiffLayers map[common.Hash]map[common.Hash]*types.DiffLayer // map[blockHash] map[DiffHash]Diff
 	diffHashToBlockHash   map[common.Hash]common.Hash                      // map[diffHash]blockHash
 	diffHashToPeers       map[common.Hash]map[string]struct{}              // map[diffHash]map[pid]
 	diffNumToBlockHashes  map[uint64]map[common.Hash]struct{}              // map[number]map[blockHash]
@@ -284,7 +284,7 @@ func NewBlockChain(db ethdb.Database, cacheConfig *CacheConfig, chainConfig *par
 		engine:                engine,
 		vmConfig:              vmConfig,
 		diffQueue:             prque.New(nil),
-		receivedDiffLayers:    make(map[common.Hash]map[common.Hash]*types.DiffLayer),
+		blockHashToDiffLayers: make(map[common.Hash]map[common.Hash]*types.DiffLayer),
 		diffHashToBlockHash:   make(map[common.Hash]common.Hash),
 		diffHashToPeers:       make(map[common.Hash]map[string]struct{}),
 		diffNumToBlockHashes:  make(map[uint64]map[common.Hash]struct{}),
@@ -2477,7 +2477,7 @@ func (bc *BlockChain) trustedDiffLayerFreezeLoop() {
 func (bc *BlockChain) GetUnTrustedDiffLayer(blockHash common.Hash, pid string) *types.DiffLayer {
 	bc.diffMux.RLock()
 	defer bc.diffMux.RUnlock()
-	if diffs, exist := bc.receivedDiffLayers[blockHash]; exist && len(diffs) != 0 {
+	if diffs, exist := bc.blockHashToDiffLayers[blockHash]; exist && len(diffs) != 0 {
 		if len(diffs) == 1 {
 			// return the only one diff layer
 			for _, diff := range diffs {
@@ -2489,7 +2489,7 @@ func (bc *BlockChain) GetUnTrustedDiffLayer(blockHash common.Hash, pid string) *
 				if diffHashes, exist := bc.diffPeersToDiffHashes[pid]; exist {
 					for diff := range diffs {
 						if _, overlap := diffHashes[diff]; overlap {
-							return bc.receivedDiffLayers[blockHash][diff]
+							return bc.blockHashToDiffLayers[blockHash][diff]
 						}
 					}
 				}
@@ -2524,10 +2524,10 @@ func (bc *BlockChain) removeDiffLayers(diffHash common.Hash) {
 	for invalidDiffHash := range invalidDiffHashes {
 		delete(bc.diffHashToPeers, invalidDiffHash)
 		affectedBlockHash := bc.diffHashToBlockHash[invalidDiffHash]
-		if diffs, exist := bc.receivedDiffLayers[affectedBlockHash]; exist {
+		if diffs, exist := bc.blockHashToDiffLayers[affectedBlockHash]; exist {
 			delete(diffs, invalidDiffHash)
 			if len(diffs) == 0 {
-				delete(bc.receivedDiffLayers, affectedBlockHash)
+				delete(bc.blockHashToDiffLayers, affectedBlockHash)
 			}
 		}
 		delete(bc.diffHashToBlockHash, invalidDiffHash)
@@ -2575,14 +2575,14 @@ func (bc *BlockChain) pruneDiffLayer() {
 	}
 	staleDiffHashes := make(map[common.Hash]struct{}, 0)
 	for blockHash := range staleBlockHashes {
-		if diffHashes, exist := bc.receivedDiffLayers[blockHash]; exist {
+		if diffHashes, exist := bc.blockHashToDiffLayers[blockHash]; exist {
 			for diffHash := range diffHashes {
 				staleDiffHashes[diffHash] = struct{}{}
 				delete(bc.diffHashToBlockHash, diffHash)
 				delete(bc.diffHashToPeers, diffHash)
 			}
 		}
-		delete(bc.receivedDiffLayers, blockHash)
+		delete(bc.blockHashToDiffLayers, blockHash)
 	}
 	for diffHash := range staleDiffHashes {
 		for p, diffHashes := range bc.diffPeersToDiffHashes {
@@ -2632,10 +2632,10 @@ func (bc *BlockChain) HandleDiffLayer(diffLayer *types.DiffLayer, pid string) er
 	}
 	bc.diffHashToPeers[diffLayer.DiffHash][pid] = struct{}{}
 
-	if _, exist := bc.receivedDiffLayers[diffLayer.BlockHash]; !exist {
-		bc.receivedDiffLayers[diffLayer.BlockHash] = make(map[common.Hash]*types.DiffLayer)
+	if _, exist := bc.blockHashToDiffLayers[diffLayer.BlockHash]; !exist {
+		bc.blockHashToDiffLayers[diffLayer.BlockHash] = make(map[common.Hash]*types.DiffLayer)
 	}
-	bc.receivedDiffLayers[diffLayer.BlockHash][diffLayer.DiffHash] = diffLayer
+	bc.blockHashToDiffLayers[diffLayer.BlockHash][diffLayer.DiffHash] = diffLayer
 	bc.diffHashToBlockHash[diffLayer.DiffHash] = diffLayer.BlockHash
 
 	return nil

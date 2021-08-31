@@ -386,7 +386,7 @@ type DiffLayer struct {
 type extDiffLayer struct {
 	BlockHash common.Hash
 	Number    uint64
-	Receipts  Receipts // Receipts are duplicated stored to simplify the logic
+	Receipts  []*ReceiptForStorage // Receipts are duplicated stored to simplify the logic
 	Codes     []DiffCode
 	Destructs []common.Address
 	Accounts  []DiffAccount
@@ -399,17 +399,26 @@ func (d *DiffLayer) DecodeRLP(s *rlp.Stream) error {
 	if err := s.Decode(&ed); err != nil {
 		return err
 	}
-	d.BlockHash, d.Number, d.Receipts, d.Codes, d.Destructs, d.Accounts, d.Storages =
-		ed.BlockHash, ed.Number, ed.Receipts, ed.Codes, ed.Destructs, ed.Accounts, ed.Storages
+	d.BlockHash, d.Number, d.Codes, d.Destructs, d.Accounts, d.Storages =
+		ed.BlockHash, ed.Number, ed.Codes, ed.Destructs, ed.Accounts, ed.Storages
+
+	d.Receipts = make([]*Receipt, len(ed.Receipts))
+	for i, storageReceipt := range ed.Receipts {
+		d.Receipts[i] = (*Receipt)(storageReceipt)
+	}
 	return nil
 }
 
 // EncodeRLP serializes b into the Ethereum RLP block format.
 func (d *DiffLayer) EncodeRLP(w io.Writer) error {
+	storageReceipts := make([]*ReceiptForStorage, len(d.Receipts))
+	for i, receipt := range d.Receipts {
+		storageReceipts[i] = (*ReceiptForStorage)(receipt)
+	}
 	return rlp.Encode(w, extDiffLayer{
 		BlockHash: d.BlockHash,
 		Number:    d.Number,
-		Receipts:  d.Receipts,
+		Receipts:  storageReceipts,
 		Codes:     d.Codes,
 		Destructs: d.Destructs,
 		Accounts:  d.Accounts,

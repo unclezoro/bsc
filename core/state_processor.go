@@ -80,7 +80,7 @@ func (p *LightStateProcessor) Process(block *types.Block, statedb *state.StateDB
 		if peer, ok := block.ReceivedFrom.(PeerIDer); ok {
 			pid = peer.ID()
 		}
-		diffLayer := p.bc.GetDiffLayer(block.Hash(), pid)
+		diffLayer := p.bc.GetUnTrustedDiffLayer(block.Hash(), pid)
 		if diffLayer != nil {
 			receipts, logs, gasUsed, err := p.LightProcess(diffLayer, block, statedb, cfg)
 			if err == nil {

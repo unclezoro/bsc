@@ -944,12 +944,12 @@ func (bc *BlockChain) GetDiffLayerRLP(blockHash common.Hash) rlp.RawValue {
 		if err != nil {
 			return nil
 		}
-		bc.diffLayerRLPCache.Add(blockHash, bz)
+		bc.diffLayerRLPCache.Add(blockHash, rlp.RawValue(bz))
 		return bz
 	}
 
 	// fallback to untrusted sources.
-	diff := bc.GetDiffLayer(blockHash, "")
+	diff := bc.GetUnTrustedDiffLayer(blockHash, "")
 	if diff != nil {
 		bz, err := rlp.EncodeToBytes(diff)
 		if err != nil {
@@ -966,7 +966,7 @@ func (bc *BlockChain) GetDiffLayerRLP(blockHash common.Hash) rlp.RawValue {
 	}
 	rawData := rawdb.ReadDiffLayerRLP(diffStore, blockHash)
 	if len(rawData) != 0 {
-		bc.diffLayerRLPCache.Add(blockHash, rawData)
+		bc.diffLayerRLPCache.Add(blockHash, rlp.RawValue(rawData))
 	}
 	return rawData
 }
@@ -2018,10 +2018,10 @@ func (bc *BlockChain) insertChain(chain types.Blocks, verifySeals bool) (int, er
 		if !statedb.IsLightProcessed() {
 			if err := bc.validator.ValidateState(block, statedb, receipts, usedGas); err != nil {
 				log.Error("validate state failed", "error", err)
+				bc.reportBlock(block, receipts, err)
 				return it.index, err
 			}
 		}
-		bc.reportBlock(block, receipts, err)
 		bc.cacheReceipts(block.Hash(), receipts)
 		bc.cacheBlock(block.Hash(), block)
 		proctime := time.Since(start)
@@ -2474,7 +2474,7 @@ func (bc *BlockChain) trustedDiffLayerFreezeLoop() {
 	}
 }
 
-func (bc *BlockChain) GetDiffLayer(blockHash common.Hash, pid string) *types.DiffLayer {
+func (bc *BlockChain) GetUnTrustedDiffLayer(blockHash common.Hash, pid string) *types.DiffLayer {
 	bc.diffMux.RLock()
 	defer bc.diffMux.RUnlock()
 	if diffs, exist := bc.receivedDiffLayers[blockHash]; exist && len(diffs) != 0 {
@@ -2599,17 +2599,20 @@ func (bc *BlockChain) HandleDiffLayer(diffLayer *types.DiffLayer, pid string) er
 	// Basic check
 	currentHeight := bc.CurrentBlock().NumberU64()
 	if diffLayer.Number > currentHeight && diffLayer.Number-currentHeight > maxDiffQueueDist {
-		return errors.New("diff layers too new from current")
+		log.Error("diff layers too new from current", "pid", pid)
+		return nil
 	}
 	if diffLayer.Number < currentHeight && currentHeight-diffLayer.Number > maxDiffForkDist {
-		return errors.New("diff layers too old from current")
+		log.Error("diff layers too old from current", "pid", pid)
+		return nil
 	}
 
 	bc.diffMux.Lock()
 	defer bc.diffMux.Unlock()
 
 	if len(bc.diffPeersToDiffHashes[pid]) > maxDiffLimit {
-		return errors.New("too many accumulated diffLayers")
+		log.Error("too many accumulated diffLayers", "pid", pid)
+		return nil
 	}
 	if _, exist := bc.diffPeersToDiffHashes[pid]; exist {
 		if _, alreadyHas := bc.diffPeersToDiffHashes[pid][diffLayer.DiffHash]; alreadyHas {

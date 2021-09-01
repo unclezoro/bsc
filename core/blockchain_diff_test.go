@@ -23,16 +23,19 @@ package core
 import (
 	"math/big"
 	"testing"
+	"time"
 
 	"golang.org/x/crypto/sha3"
 
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/consensus/ethash"
 	"github.com/ethereum/go-ethereum/core/rawdb"
+	"github.com/ethereum/go-ethereum/core/state/snapshot"
 	"github.com/ethereum/go-ethereum/core/types"
 	"github.com/ethereum/go-ethereum/core/vm"
 	"github.com/ethereum/go-ethereum/crypto"
 	"github.com/ethereum/go-ethereum/ethdb"
+	"github.com/ethereum/go-ethereum/ethdb/memorydb"
 	"github.com/ethereum/go-ethereum/params"
 	"github.com/ethereum/go-ethereum/rlp"
 )
@@ -63,6 +66,7 @@ func newTestBackendWithGenerator(blocks int, lightProcess bool) *testBackend {
 	signer := types.HomesteadSigner{}
 	// Create a database pre-initialize with a genesis block
 	db := rawdb.NewMemoryDatabase()
+	db.SetDiffStore(memorydb.New())
 	(&Genesis{
 		Config: params.TestChainConfig,
 		Alloc:  GenesisAlloc{testAddr: {Balance: big.NewInt(100000000000000000)}},
@@ -103,36 +107,157 @@ func (b *testBackend) close() {
 
 func (b *testBackend) Chain() *BlockChain { return b.chain }
 
-func TestHandleDiffLayer(t *testing.T) {
+func rawDataToDiffLayer(data rlp.RawValue) (*types.DiffLayer, error) {
+	var diff types.DiffLayer
+	hasher := sha3.NewLegacyKeccak256()
+	err := rlp.DecodeBytes(data, &diff)
+	if err != nil {
+		return nil, err
+	}
+	hasher.Write(data)
+	var diffHash common.Hash
+	hasher.Sum(diffHash[:0])
+	hasher.Reset()
+	diff.DiffHash = diffHash
+	return &diff, nil
+}
+
+func TestProcessDiffLayer(t *testing.T) {
 	t.Parallel()
 
 	blockNum := maxDiffLimit - 1
 	fullBackend := newTestBackend(blockNum, false)
+	falseDiff := 5
 	defer fullBackend.close()
 
 	lightBackend := newTestBackend(0, true)
-	for i := 1; i <= blockNum; i++ {
+	defer lightBackend.close()
+	for i := 1; i <= blockNum-falseDiff; i++ {
 		block := fullBackend.chain.GetBlockByNumber(uint64(i))
 		if block == nil {
 			t.Fatal("block should not be nil")
 		}
 		blockHash := block.Hash()
 		rawDiff := fullBackend.chain.GetDiffLayerRLP(blockHash)
-		var diff types.DiffLayer
-		hasher := sha3.NewLegacyKeccak256()
-		err := rlp.DecodeBytes(rawDiff, &diff)
+		diff, err := rawDataToDiffLayer(rawDiff)
 		if err != nil {
-			t.Fatal("decode raw data failed")
+			t.Errorf("failed to decode rawdata %v", err)
 		}
-		hasher.Write(rawDiff)
-		var diffHash common.Hash
-		hasher.Sum(diffHash[:0])
-		hasher.Reset()
-		diff.DiffHash = diffHash
-		lightBackend.Chain().HandleDiffLayer(&diff, "testpid")
+		lightBackend.Chain().HandleDiffLayer(diff, "testpid")
 		_, err = lightBackend.chain.insertChain([]*types.Block{block}, true)
 		if err != nil {
 			t.Errorf("failed to insert block %v", err)
 		}
 	}
+	currentBlock := lightBackend.chain.CurrentBlock()
+	nextBlock := fullBackend.chain.GetBlockByNumber(currentBlock.NumberU64() + 1)
+	rawDiff := fullBackend.chain.GetDiffLayerRLP(nextBlock.Hash())
+	diff, _ := rawDataToDiffLayer(rawDiff)
+	latestAccount, _ := snapshot.FullAccount(diff.Accounts[0].Blob)
+	latestAccount.Balance = big.NewInt(0)
+	bz, _ := rlp.EncodeToBytes(&latestAccount)
+	diff.Accounts[0].Blob = bz
+
+	lightBackend.Chain().HandleDiffLayer(diff, "testpid")
+
+	_, err := lightBackend.chain.insertChain([]*types.Block{nextBlock}, true)
+	if err != nil {
+		t.Errorf("failed to process block %v", err)
+	}
+
+	// the diff cache should be cleared
+	if len(lightBackend.chain.diffPeersToDiffHashes) != 0 {
+		t.Errorf("the size of diffPeersToDiffHashes should be 0, but get %d", len(lightBackend.chain.diffPeersToDiffHashes))
+	}
+	if len(lightBackend.chain.diffHashToPeers) != 0 {
+		t.Errorf("the size of diffHashToPeers should be 0, but get %d", len(lightBackend.chain.diffHashToPeers))
+	}
+	if len(lightBackend.chain.diffHashToBlockHash) != 0 {
+		t.Errorf("the size of diffHashToBlockHash should be 0, but get %d", len(lightBackend.chain.diffHashToBlockHash))
+	}
+	if len(lightBackend.chain.blockHashToDiffLayers) != 0 {
+		t.Errorf("the size of blockHashToDiffLayers should be 0, but get %d", len(lightBackend.chain.blockHashToDiffLayers))
+	}
+}
+
+func TestFreezeDiffLayer(t *testing.T) {
+	t.Parallel()
+
+	blockNum := 1024
+	fullBackend := newTestBackend(blockNum, true)
+	defer fullBackend.close()
+	if fullBackend.chain.diffQueue.Size() != blockNum {
+		t.Errorf("size of diff queue is wrong, expected: %d, get: %d", blockNum, fullBackend.chain.diffQueue.Size())
+	}
+	time.Sleep(diffLayerFreezerRecheckInterval + 1*time.Second)
+	if fullBackend.chain.diffQueue.Size() != int(fullBackend.chain.triesInMemory) {
+		t.Errorf("size of diff queue is wrong, expected: %d, get: %d", blockNum, fullBackend.chain.diffQueue.Size())
+	}
+
+	block := fullBackend.chain.GetBlockByNumber(uint64(blockNum / 2))
+	diffStore := fullBackend.chain.db.DiffStore()
+	rawData := rawdb.ReadDiffLayerRLP(diffStore, block.Hash())
+	if len(rawData) == 0 {
+		t.Error("do not find diff layer in db")
+	}
+}
+
+func TestPruneDiffLayer(t *testing.T) {
+	t.Parallel()
+
+	blockNum := 1024
+	fullBackend := newTestBackend(blockNum, true)
+	defer fullBackend.close()
+
+	anotherFullBackend := newTestBackend(2*blockNum, true)
+	defer anotherFullBackend.close()
+
+	for num := uint64(1); num < uint64(blockNum); num++ {
+		header := fullBackend.chain.GetHeaderByNumber(num)
+		rawDiff := fullBackend.chain.GetDiffLayerRLP(header.Hash())
+		diff, _ := rawDataToDiffLayer(rawDiff)
+		fullBackend.Chain().HandleDiffLayer(diff, "testpid1")
+		fullBackend.Chain().HandleDiffLayer(diff, "testpid2")
+
+	}
+	fullBackend.chain.pruneDiffLayer()
+	if len(fullBackend.chain.diffNumToBlockHashes) != maxDiffForkDist {
+		t.Error("unexpected size of diffNumToBlockHashes")
+	}
+	if len(fullBackend.chain.diffPeersToDiffHashes) != 2 {
+		t.Error("unexpected size of diffPeersToDiffHashes")
+	}
+	if len(fullBackend.chain.blockHashToDiffLayers) != maxDiffForkDist {
+		t.Error("unexpected size of diffNumToBlockHashes")
+	}
+	if len(fullBackend.chain.diffHashToBlockHash) != maxDiffForkDist {
+		t.Error("unexpected size of diffHashToBlockHash")
+	}
+	if len(fullBackend.chain.diffHashToPeers) != maxDiffForkDist {
+		t.Error("unexpected size of diffHashToPeers")
+	}
+
+	blocks := make([]*types.Block, 0, blockNum)
+	for i := blockNum + 1; i <= 2*blockNum; i++ {
+		b := anotherFullBackend.chain.GetBlockByNumber(uint64(i))
+		blocks = append(blocks, b)
+	}
+	fullBackend.chain.insertChain(blocks, true)
+	fullBackend.chain.pruneDiffLayer()
+	if len(fullBackend.chain.diffNumToBlockHashes) != 0 {
+		t.Error("unexpected size of diffNumToBlockHashes")
+	}
+	if len(fullBackend.chain.diffPeersToDiffHashes) != 0 {
+		t.Error("unexpected size of diffPeersToDiffHashes")
+	}
+	if len(fullBackend.chain.blockHashToDiffLayers) != 0 {
+		t.Error("unexpected size of diffNumToBlockHashes")
+	}
+	if len(fullBackend.chain.diffHashToBlockHash) != 0 {
+		t.Error("unexpected size of diffHashToBlockHash")
+	}
+	if len(fullBackend.chain.diffHashToPeers) != 0 {
+		t.Error("unexpected size of diffHashToPeers")
+	}
+
 }

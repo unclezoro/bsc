@@ -89,9 +89,10 @@ func (p *LightStateProcessor) Process(block *types.Block, statedb *state.StateDB
 			}
 			receipts, logs, gasUsed, err := p.LightProcess(diffLayer, block, statedb, cfg)
 			if err == nil {
+				log.Error("do light process success at block %d\n", block.NumberU64())
 				return statedb, receipts, logs, gasUsed, nil
 			} else {
-				log.Error("do light sync err %d, %v\n", block.NumberU64(), err)
+				log.Error("do light process err %d, %v\n", block.NumberU64(), err)
 				p.bc.removeDiffLayers(diffLayer.DiffHash)
 				// prepare new statedb
 				statedb.StopPrefetcher()

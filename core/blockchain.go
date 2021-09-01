@@ -93,7 +93,7 @@ const (
 	diffLayerFreezerRecheckInterval = 3 * time.Second
 	diffLayerFreezerBlockLimit      = 864000          // The number of diff layers that should be kept in disk.
 	diffLayerPruneRecheckInterval   = 1 * time.Second // The interval to prune unverified diff layers
-	maxDiffQueueDist                = 64              // Maximum allowed distance from the chain head to queue diffLayers
+	maxDiffQueueDist                = 128             // Maximum allowed distance from the chain head to queue diffLayers
 	maxDiffLimit                    = 128             // Maximum number of unique diff layers a peer may have delivered
 	maxDiffForkDist                 = 11              // Maximum allowed backward distance from the chain head
 
@@ -2442,7 +2442,7 @@ func (bc *BlockChain) trustedDiffLayerFreezeLoop() {
 				diffLayer := diff.(*types.DiffLayer)
 
 				// if the block old enough
-				if int64(currentHeight)+prio > int64(bc.triesInMemory) {
+				if int64(currentHeight)+prio >= int64(bc.triesInMemory) {
 					canonicalHash := bc.GetCanonicalHash(uint64(-prio))
 					// on the canonical chain
 					if canonicalHash == diffLayer.BlockHash {
@@ -2587,7 +2587,7 @@ func (bc *BlockChain) pruneDiffLayer() {
 	for diffHash := range staleDiffHashes {
 		for p, diffHashes := range bc.diffPeersToDiffHashes {
 			delete(diffHashes, diffHash)
-			if len(diffHash) == 0 {
+			if len(diffHashes) == 0 {
 				delete(bc.diffPeersToDiffHashes, p)
 			}
 		}

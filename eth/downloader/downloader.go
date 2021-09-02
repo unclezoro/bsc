@@ -161,10 +161,10 @@ type Downloader struct {
 	quitLock sync.Mutex    // Lock to prevent double closes
 
 	// Testing hooks
-	syncInitHook     func(uint64, uint64)          // Method to call upon initiating a new sync run
+	syncInitHook     func(uint64, uint64)                    // Method to call upon initiating a new sync run
 	bodyFetchHook    func(SyncMode, string, []*types.Header) // Method to call upon starting a block body fetch
 	receiptFetchHook func(SyncMode, string, []*types.Header) // Method to call upon starting a receipt fetch
-	chainInsertHook  func([]*fetchResult)          // Method to call upon inserting a chain of blocks (possibly in multiple invocations)
+	chainInsertHook  func([]*fetchResult)                    // Method to call upon inserting a chain of blocks (possibly in multiple invocations)
 }
 
 // LightChain encapsulates functions required to synchronise a light chain.
@@ -221,6 +221,32 @@ type BlockChain interface {
 }
 
 type DownloadOption func(downloader *Downloader) *Downloader
+
+type IDiffPeer interface {
+	RequestDiffLayers([]common.Hash) error
+}
+
+type IPeerSet interface {
+	GetDiffPeer(string) IDiffPeer
+}
+
+func DiffBodiesFetchOption(peers IPeerSet) DownloadOption {
+	return func(dl *Downloader) *Downloader {
+		var hook = func(mode SyncMode, peerID string, headers []*types.Header) {
+			if mode == FullSync {
+				if ep := peers.GetDiffPeer(peerID); ep != nil {
+					hashes := make([]common.Hash, 0, len(headers))
+					for _, header := range headers {
+						hashes = append(hashes, header.Hash())
+					}
+					ep.RequestDiffLayers(hashes)
+				}
+			}
+		}
+		dl.SetBodyFetchHook(hook)
+		return dl
+	}
+}
 
 // New creates a new downloader to fetch hashes and blocks from remote peers.
 func New(checkpoint uint64, stateDb ethdb.Database, stateBloom *trie.SyncBloom, mux *event.TypeMux, chain BlockChain, lightchain LightChain, dropPeer peerDropFn, options ...DownloadOption) *Downloader {
@@ -1519,7 +1545,7 @@ func (d *Downloader) fetchParts(deliveryCh chan dataPack, deliver func(dataPack)
 				}
 				// Fetch the chunk and make sure any errors return the hashes to the queue
 				if fetchHook != nil {
-					fetchHook(d.getMode(),peer.id, request.Headers)
+					fetchHook(d.getMode(), peer.id, request.Headers)
 				}
 				if err := fetch(peer, request); err != nil {
 					// Although we could try and make an attempt to fix this, this error really

@@ -113,7 +113,7 @@ type handler struct {
 	stateBloom   *trie.SyncBloom
 	blockFetcher *fetcher.BlockFetcher
 	txFetcher    *fetcher.TxFetcher
-	peers        *peerSet
+	peers        *PeerSet
 
 	eventMux      *event.TypeMux
 	txsCh         chan core.NewTxsEvent
@@ -194,7 +194,7 @@ func newHandler(config *handlerConfig) (*handler, error) {
 	}
 	var downloadOptions []downloader.DownloadOption
 	if h.lightSync {
-		downloadOptions = append(downloadOptions, DiffBodiesFetchOption(h.peers))
+		downloadOptions = append(downloadOptions, downloader.DiffBodiesFetchOption(h.peers))
 	}
 	h.downloader = downloader.New(h.checkpointNumber, config.Database, h.stateBloom, h.eventMux, h.chain, nil, h.removePeer, downloadOptions...)
 
@@ -234,7 +234,7 @@ func newHandler(config *handlerConfig) (*handler, error) {
 	h.blockFetcher = fetcher.NewBlockFetcher(false, nil, h.chain.GetBlockByHash, validator, h.BroadcastBlock, heighter, nil, inserter, h.removePeer)
 
 	fetchTx := func(peer string, hashes []common.Hash) error {
-		p := h.peers.peer(peer)
+		p := h.peers.Peer(peer)
 		if p == nil {
 			return errors.New("unknown peer")
 		}
@@ -306,7 +306,7 @@ func (h *handler) runEthPeer(peer *eth.Peer, handler eth.Handler) error {
 	}
 	defer h.removePeer(peer.ID())
 
-	p := h.peers.peer(peer.ID())
+	p := h.peers.Peer(peer.ID())
 	if p == nil {
 		return errors.New("peer dropped during handling")
 	}
@@ -398,7 +398,7 @@ func (h *handler) removePeer(id string) {
 		logger = log.New("peer", id[:8])
 	}
 	// Abort if the peer does not exist
-	peer := h.peers.peer(id)
+	peer := h.peers.Peer(id)
 	if peer == nil {
 		logger.Error("Ethereum peer removal failed", "err", errPeerNotRegistered)
 		return
@@ -484,8 +484,8 @@ func (h *handler) BroadcastBlock(block *types.Block, propagate bool) {
 		}
 		diff := h.chain.GetDiffLayerRLP(block.Hash())
 		for _, peer := range transfer {
-			if len(diff) != 0 && peer.diffExt != nil {
-				peer.diffExt.AsyncSendDiffLayer([]rlp.RawValue{diff})
+			if len(diff) != 0 && peer.DiffExt != nil {
+				peer.DiffExt.AsyncSendDiffLayer([]rlp.RawValue{diff})
 			}
 			peer.AsyncSendNewBlock(block, td)
 		}

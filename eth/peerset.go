@@ -22,6 +22,8 @@ import (
 	"sync"
 
 	"github.com/ethereum/go-ethereum/common"
+	"github.com/ethereum/go-ethereum/core/types"
+	"github.com/ethereum/go-ethereum/eth/downloader"
 	"github.com/ethereum/go-ethereum/eth/protocols/diff"
 	"github.com/ethereum/go-ethereum/eth/protocols/eth"
 	"github.com/ethereum/go-ethereum/eth/protocols/snap"
@@ -64,6 +66,24 @@ type peerSet struct {
 
 	lock   sync.RWMutex
 	closed bool
+}
+
+func DiffBodiesFetchOption(peers *peerSet) downloader.DownloadOption {
+	return func(dl *downloader.Downloader) *downloader.Downloader {
+		var hook = func(mode downloader.SyncMode, peerID string, headers []*types.Header) {
+			if mode == downloader.FullSync {
+				if ep := peers.peer(peerID); ep != nil && ep.diffExt != nil {
+					hashes := make([]common.Hash, 0,len(headers))
+					for _, header := range headers {
+						hashes = append(hashes, header.Hash())
+					}
+					ep.diffExt.RequestDiffLayers(hashes)
+				}
+			}
+		}
+		dl.SetBodyFetchHook(hook)
+		return dl
+	}
 }
 
 // newPeerSet creates a new peer set to track the active participants.

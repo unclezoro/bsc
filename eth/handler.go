@@ -193,7 +193,7 @@ func newHandler(config *handlerConfig) (*handler, error) {
 		h.stateBloom = trie.NewSyncBloom(config.BloomCache, config.Database)
 	}
 	var downloadOptions []downloader.DownloadOption
-	if h.lightSync {
+	if h.diffSync {
 		downloadOptions = append(downloadOptions, downloader.DiffBodiesFetchOption(h.peers))
 	}
 	h.downloader = downloader.New(h.checkpointNumber, config.Database, h.stateBloom, h.eventMux, h.chain, nil, h.removePeer, downloadOptions...)
@@ -484,8 +484,8 @@ func (h *handler) BroadcastBlock(block *types.Block, propagate bool) {
 		}
 		diff := h.chain.GetDiffLayerRLP(block.Hash())
 		for _, peer := range transfer {
-			if len(diff) != 0 && peer.DiffExt != nil {
-				peer.DiffExt.AsyncSendDiffLayer([]rlp.RawValue{diff})
+			if len(diff) != 0 && peer.diffExt != nil {
+				peer.diffExt.AsyncSendDiffLayer([]rlp.RawValue{diff})
 			}
 			peer.AsyncSendNewBlock(block, td)
 		}

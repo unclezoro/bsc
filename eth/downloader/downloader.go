@@ -232,13 +232,13 @@ type IPeerSet interface {
 
 func DiffBodiesFetchOption(peers IPeerSet) DownloadOption {
 	return func(dl *Downloader) *Downloader {
-		var hook = func(headers []*types.Header, options ...interface{}) {
-			if len(options) < 2 {
+		var hook = func(headers []*types.Header, args ...interface{}) {
+			if len(args) < 2 {
 				return
 			}
-			if mode, ok := options[0].(SyncMode); ok {
+			if mode, ok := args[0].(SyncMode); ok {
 				if mode == FullSync {
-					if peerID, ok := options[1].(string); ok {
+					if peerID, ok := args[1].(string); ok {
 						if ep := peers.GetDiffPeer(peerID); ep != nil {
 							hashes := make([]common.Hash, 0, len(headers))
 							for _, header := range headers {

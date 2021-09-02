@@ -195,8 +195,8 @@ func (h *ethHandler) handleBlockAnnounces(peer *eth.Peer, hashes []common.Hash, 
 	var diffFetcher fetcher.DiffRequesterFn
 	if h.diffSync {
 		// the peer support diff protocol
-		if ep := h.peers.peer(peer.ID()); ep != nil && ep.DiffExt != nil {
-			diffFetcher = ep.DiffExt.RequestDiffLayers
+		if ep := h.peers.peer(peer.ID()); ep != nil && ep.diffExt != nil {
+			diffFetcher = ep.diffExt.RequestDiffLayers
 		}
 	}
 

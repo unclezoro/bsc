@@ -41,8 +41,8 @@ func (h *diffHandler) RunPeer(peer *diff.Peer, hand diff.Handler) error {
 // PeerInfo retrieves all known `diff` information about a peer.
 func (h *diffHandler) PeerInfo(id enode.ID) interface{} {
 	if p := h.peers.peer(id.String()); p != nil {
-		if p.DiffExt != nil {
-			return p.DiffExt.info()
+		if p.diffExt != nil {
+			return p.diffExt.info()
 		}
 	}
 	return nil

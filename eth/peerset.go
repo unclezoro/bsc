@@ -18,11 +18,11 @@ package eth
 
 import (
 	"errors"
-	"github.com/ethereum/go-ethereum/eth/downloader"
 	"math/big"
 	"sync"
 
 	"github.com/ethereum/go-ethereum/common"
+	"github.com/ethereum/go-ethereum/eth/downloader"
 	"github.com/ethereum/go-ethereum/eth/protocols/diff"
 	"github.com/ethereum/go-ethereum/eth/protocols/eth"
 	"github.com/ethereum/go-ethereum/eth/protocols/snap"
@@ -207,8 +207,8 @@ func (ps *peerSet) waitDiffExtension(peer *eth.Peer) (*diff.Peer, error) {
 }
 
 func (ps *peerSet) GetDiffPeer(pid string) downloader.IDiffPeer {
-	if p := ps.peer(pid); p != nil && p.DiffExt != nil {
-		return p.DiffExt
+	if p := ps.peer(pid); p != nil && p.diffExt != nil {
+		return p.diffExt
 	}
 	return nil
 }
@@ -235,7 +235,7 @@ func (ps *peerSet) registerPeer(peer *eth.Peer, ext *snap.Peer, diffExt *diff.Pe
 		ps.snapPeers++
 	}
 	if diffExt != nil {
-		eth.DiffExt = &diffPeer{diffExt}
+		eth.diffExt = &diffPeer{diffExt}
 	}
 	ps.peers[id] = eth
 	return nil

@@ -209,7 +209,8 @@ func (p *LightStateProcessor) LightProcess(diffLayer *types.DiffLayer, block *ty
 					bytes.Equal(previousAccount.CodeHash, latestAccount.CodeHash) &&
 					previousAccount.Balance.Cmp(latestAccount.Balance) == 0 &&
 					previousAccount.Root == common.BytesToHash(latestAccount.Root) {
-					log.Warn("receive redundant account change in diff layer", "account", diffAccount, "num", block.NumberU64())
+					// It is normal to receive redundant message since the collected message is redundant.
+					log.Debug("receive redundant account change in diff layer", "account", diffAccount, "num", block.NumberU64())
 					snapMux.Lock()
 					delete(snapAccounts, diffAccount)
 					delete(snapStorage, diffAccount)

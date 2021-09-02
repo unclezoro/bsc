@@ -162,8 +162,8 @@ type Downloader struct {
 
 	// Testing hooks
 	syncInitHook     func(uint64, uint64)                    // Method to call upon initiating a new sync run
-	bodyFetchHook    func(SyncMode, string, []*types.Header) // Method to call upon starting a block body fetch
-	receiptFetchHook func(SyncMode, string, []*types.Header) // Method to call upon starting a receipt fetch
+	bodyFetchHook    func([]*types.Header, ...interface{}) // Method to call upon starting a block body fetch
+	receiptFetchHook func([]*types.Header, ...interface{}) // Method to call upon starting a receipt fetch
 	chainInsertHook  func([]*fetchResult)                    // Method to call upon inserting a chain of blocks (possibly in multiple invocations)
 }
 
@@ -232,18 +232,25 @@ type IPeerSet interface {
 
 func DiffBodiesFetchOption(peers IPeerSet) DownloadOption {
 	return func(dl *Downloader) *Downloader {
-		var hook = func(mode SyncMode, peerID string, headers []*types.Header) {
-			if mode == FullSync {
-				if ep := peers.GetDiffPeer(peerID); ep != nil {
-					hashes := make([]common.Hash, 0, len(headers))
-					for _, header := range headers {
-						hashes = append(hashes, header.Hash())
+		var hook = func(headers []*types.Header, options ...interface{}) {
+			if len(options) < 2 {
+				return
+			}
+			if mode, ok := options[0].(SyncMode); ok {
+				if mode == FullSync {
+					if peerID, ok := options[1].(string); ok {
+						if ep := peers.GetDiffPeer(peerID); ep != nil {
+							hashes := make([]common.Hash, 0, len(headers))
+							for _, header := range headers {
+								hashes = append(hashes, header.Hash())
+							}
+							ep.RequestDiffLayers(hashes)
+						}
 					}
-					ep.RequestDiffLayers(hashes)
 				}
 			}
 		}
-		dl.SetBodyFetchHook(hook)
+		dl.bodyFetchHook = hook
 		return dl
 	}
 }
@@ -321,10 +328,6 @@ func (d *Downloader) Progress() ethereum.SyncProgress {
 		PulledStates:  d.syncStatsState.processed,
 		KnownStates:   d.syncStatsState.processed + d.syncStatsState.pending,
 	}
-}
-
-func (d *Downloader) SetBodyFetchHook(hook func(SyncMode, string, []*types.Header)) {
-	d.bodyFetchHook = hook
 }
 
 // Synchronising returns whether the downloader is currently retrieving blocks.
@@ -1396,7 +1399,7 @@ func (d *Downloader) fetchReceipts(from uint64) error {
 //  - kind:        textual label of the type being downloaded to display in log messages
 func (d *Downloader) fetchParts(deliveryCh chan dataPack, deliver func(dataPack) (int, error), wakeCh chan bool,
 	expire func() map[string]int, pending func() int, inFlight func() bool, reserve func(*peerConnection, int) (*fetchRequest, bool, bool),
-	fetchHook func(SyncMode, string, []*types.Header), fetch func(*peerConnection, *fetchRequest) error, cancel func(*fetchRequest), capacity func(*peerConnection) int,
+	fetchHook func([]*types.Header, ...interface{}), fetch func(*peerConnection, *fetchRequest) error, cancel func(*fetchRequest), capacity func(*peerConnection) int,
 	idle func() ([]*peerConnection, int), setIdle func(*peerConnection, int, time.Time), kind string) error {
 
 	// Create a ticker to detect expired retrieval tasks
@@ -1545,7 +1548,7 @@ func (d *Downloader) fetchParts(deliveryCh chan dataPack, deliver func(dataPack)
 				}
 				// Fetch the chunk and make sure any errors return the hashes to the queue
 				if fetchHook != nil {
-					fetchHook(d.getMode(), peer.id, request.Headers)
+					fetchHook(request.Headers, d.getMode(), peer.id)
 				}
 				if err := fetch(peer, request); err != nil {
 					// Although we could try and make an attempt to fix this, this error really

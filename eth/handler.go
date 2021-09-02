@@ -113,7 +113,7 @@ type handler struct {
 	stateBloom   *trie.SyncBloom
 	blockFetcher *fetcher.BlockFetcher
 	txFetcher    *fetcher.TxFetcher
-	peers        *PeerSet
+	peers        *peerSet
 
 	eventMux      *event.TypeMux
 	txsCh         chan core.NewTxsEvent
@@ -234,7 +234,7 @@ func newHandler(config *handlerConfig) (*handler, error) {
 	h.blockFetcher = fetcher.NewBlockFetcher(false, nil, h.chain.GetBlockByHash, validator, h.BroadcastBlock, heighter, nil, inserter, h.removePeer)
 
 	fetchTx := func(peer string, hashes []common.Hash) error {
-		p := h.peers.Peer(peer)
+		p := h.peers.peer(peer)
 		if p == nil {
 			return errors.New("unknown peer")
 		}
@@ -306,7 +306,7 @@ func (h *handler) runEthPeer(peer *eth.Peer, handler eth.Handler) error {
 	}
 	defer h.removePeer(peer.ID())
 
-	p := h.peers.Peer(peer.ID())
+	p := h.peers.peer(peer.ID())
 	if p == nil {
 		return errors.New("peer dropped during handling")
 	}
@@ -398,7 +398,7 @@ func (h *handler) removePeer(id string) {
 		logger = log.New("peer", id[:8])
 	}
 	// Abort if the peer does not exist
-	peer := h.peers.Peer(id)
+	peer := h.peers.peer(id)
 	if peer == nil {
 		logger.Error("Ethereum peer removal failed", "err", errPeerNotRegistered)
 		return

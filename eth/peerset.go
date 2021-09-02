@@ -51,9 +51,9 @@ var (
 	errDiffWithoutEth = errors.New("peer connected on diff without compatible eth support")
 )
 
-// PeerSet represents the collection of active peers currently participating in
+// peerSet represents the collection of active peers currently participating in
 // the `eth` protocol, with or without the `snap` extension.
-type PeerSet struct {
+type peerSet struct {
 	peers     map[string]*ethPeer // Peers connected on the `eth` protocol
 	snapPeers int                 // Number of `snap` compatible peers for connection prioritization
 
@@ -68,8 +68,8 @@ type PeerSet struct {
 }
 
 // newPeerSet creates a new peer set to track the active participants.
-func newPeerSet() *PeerSet {
-	return &PeerSet{
+func newPeerSet() *peerSet {
+	return &peerSet{
 		peers:    make(map[string]*ethPeer),
 		snapWait: make(map[string]chan *snap.Peer),
 		snapPend: make(map[string]*snap.Peer),
@@ -81,7 +81,7 @@ func newPeerSet() *PeerSet {
 // registerSnapExtension unblocks an already connected `eth` peer waiting for its
 // `snap` extension, or if no such peer exists, tracks the extension for the time
 // being until the `eth` main protocol starts looking for it.
-func (ps *PeerSet) registerSnapExtension(peer *snap.Peer) error {
+func (ps *peerSet) registerSnapExtension(peer *snap.Peer) error {
 	// Reject the peer if it advertises `snap` without `eth` as `snap` is only a
 	// satellite protocol meaningful with the chain selection of `eth`
 	if !peer.RunningCap(eth.ProtocolName, eth.ProtocolVersions) {
@@ -111,7 +111,7 @@ func (ps *PeerSet) registerSnapExtension(peer *snap.Peer) error {
 // registerDiffExtension unblocks an already connected `eth` peer waiting for its
 // `diff` extension, or if no such peer exists, tracks the extension for the time
 // being until the `eth` main protocol starts looking for it.
-func (ps *PeerSet) registerDiffExtension(peer *diff.Peer) error {
+func (ps *peerSet) registerDiffExtension(peer *diff.Peer) error {
 	// Reject the peer if it advertises `diff` without `eth` as `diff` is only a
 	// satellite protocol meaningful with the chain selection of `eth`
 	if !peer.RunningCap(eth.ProtocolName, eth.ProtocolVersions) {
@@ -140,7 +140,7 @@ func (ps *PeerSet) registerDiffExtension(peer *diff.Peer) error {
 
 // waitExtensions blocks until all satellite protocols are connected and tracked
 // by the peerset.
-func (ps *PeerSet) waitSnapExtension(peer *eth.Peer) (*snap.Peer, error) {
+func (ps *peerSet) waitSnapExtension(peer *eth.Peer) (*snap.Peer, error) {
 	// If the peer does not support a compatible `snap`, don't wait
 	if !peer.RunningCap(snap.ProtocolName, snap.ProtocolVersions) {
 		return nil, nil
@@ -174,7 +174,7 @@ func (ps *PeerSet) waitSnapExtension(peer *eth.Peer) (*snap.Peer, error) {
 
 // waitDiffExtension blocks until all satellite protocols are connected and tracked
 // by the peerset.
-func (ps *PeerSet) waitDiffExtension(peer *eth.Peer) (*diff.Peer, error) {
+func (ps *peerSet) waitDiffExtension(peer *eth.Peer) (*diff.Peer, error) {
 	// If the peer does not support a compatible `diff`, don't wait
 	if !peer.RunningCap(diff.ProtocolName, diff.ProtocolVersions) {
 		return nil, nil
@@ -206,8 +206,8 @@ func (ps *PeerSet) waitDiffExtension(peer *eth.Peer) (*diff.Peer, error) {
 	return <-wait, nil
 }
 
-func (ps *PeerSet) GetDiffPeer(pid string) downloader.IDiffPeer {
-	if p := ps.Peer(pid); p != nil && p.DiffExt != nil {
+func (ps *peerSet) GetDiffPeer(pid string) downloader.IDiffPeer {
+	if p := ps.peer(pid); p != nil && p.DiffExt != nil {
 		return p.DiffExt
 	}
 	return nil
@@ -215,7 +215,7 @@ func (ps *PeerSet) GetDiffPeer(pid string) downloader.IDiffPeer {
 
 // registerPeer injects a new `eth` peer into the working set, or returns an error
 // if the peer is already known.
-func (ps *PeerSet) registerPeer(peer *eth.Peer, ext *snap.Peer, diffExt *diff.Peer) error {
+func (ps *peerSet) registerPeer(peer *eth.Peer, ext *snap.Peer, diffExt *diff.Peer) error {
 	// Start tracking the new peer
 	ps.lock.Lock()
 	defer ps.lock.Unlock()
@@ -243,7 +243,7 @@ func (ps *PeerSet) registerPeer(peer *eth.Peer, ext *snap.Peer, diffExt *diff.Pe
 
 // unregisterPeer removes a remote peer from the active set, disabling any further
 // actions to/from that particular entity.
-func (ps *PeerSet) unregisterPeer(id string) error {
+func (ps *peerSet) unregisterPeer(id string) error {
 	ps.lock.Lock()
 	defer ps.lock.Unlock()
 
@@ -259,7 +259,7 @@ func (ps *PeerSet) unregisterPeer(id string) error {
 }
 
 // peer retrieves the registered peer with the given id.
-func (ps *PeerSet) Peer(id string) *ethPeer {
+func (ps *peerSet) peer(id string) *ethPeer {
 	ps.lock.RLock()
 	defer ps.lock.RUnlock()
 
@@ -268,7 +268,7 @@ func (ps *PeerSet) Peer(id string) *ethPeer {
 
 // peersWithoutBlock retrieves a list of peers that do not have a given block in
 // their set of known hashes so it might be propagated to them.
-func (ps *PeerSet) peersWithoutBlock(hash common.Hash) []*ethPeer {
+func (ps *peerSet) peersWithoutBlock(hash common.Hash) []*ethPeer {
 	ps.lock.RLock()
 	defer ps.lock.RUnlock()
 
@@ -283,7 +283,7 @@ func (ps *PeerSet) peersWithoutBlock(hash common.Hash) []*ethPeer {
 
 // peersWithoutTransaction retrieves a list of peers that do not have a given
 // transaction in their set of known hashes.
-func (ps *PeerSet) peersWithoutTransaction(hash common.Hash) []*ethPeer {
+func (ps *peerSet) peersWithoutTransaction(hash common.Hash) []*ethPeer {
 	ps.lock.RLock()
 	defer ps.lock.RUnlock()
 
@@ -299,7 +299,7 @@ func (ps *PeerSet) peersWithoutTransaction(hash common.Hash) []*ethPeer {
 // len returns if the current number of `eth` peers in the set. Since the `snap`
 // peers are tied to the existence of an `eth` connection, that will always be a
 // subset of `eth`.
-func (ps *PeerSet) len() int {
+func (ps *peerSet) len() int {
 	ps.lock.RLock()
 	defer ps.lock.RUnlock()
 
@@ -307,7 +307,7 @@ func (ps *PeerSet) len() int {
 }
 
 // snapLen returns if the current number of `snap` peers in the set.
-func (ps *PeerSet) snapLen() int {
+func (ps *peerSet) snapLen() int {
 	ps.lock.RLock()
 	defer ps.lock.RUnlock()
 
@@ -316,7 +316,7 @@ func (ps *PeerSet) snapLen() int {
 
 // peerWithHighestTD retrieves the known peer with the currently highest total
 // difficulty.
-func (ps *PeerSet) peerWithHighestTD() *eth.Peer {
+func (ps *peerSet) peerWithHighestTD() *eth.Peer {
 	ps.lock.RLock()
 	defer ps.lock.RUnlock()
 
@@ -333,7 +333,7 @@ func (ps *PeerSet) peerWithHighestTD() *eth.Peer {
 }
 
 // close disconnects all peers.
-func (ps *PeerSet) close() {
+func (ps *peerSet) close() {
 	ps.lock.Lock()
 	defer ps.lock.Unlock()
 

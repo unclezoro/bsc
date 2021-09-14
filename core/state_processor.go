@@ -151,6 +151,7 @@ func (p *LightStateProcessor) LightProcess(diffLayer *types.DiffLayer, block *ty
 	}
 
 	for des := range snapDestructs {
+		log.Error("===debug delete account", "addr", des, "num", diffLayer.Number)
 		statedb.Trie().TryDelete(des[:])
 	}
 	threads := len(snapAccounts) / minNumberOfAccountPerTask

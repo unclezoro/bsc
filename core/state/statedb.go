@@ -1088,6 +1088,7 @@ func (s *StateDB) LightCommit(root common.Hash) (common.Hash, *types.DiffLayer, 
 	commitFuncs := []func() error{
 		func() error {
 			for codeHash, code := range s.diffCode {
+				log.Error("===debug do write code", "codeHash", codeHash, "num", s.diffLayer.Number)
 				rawdb.WriteCode(codeWriter, codeHash, code)
 				if codeWriter.ValueSize() >= ethdb.IdealBatchSize {
 					if err := codeWriter.Write(); err != nil {

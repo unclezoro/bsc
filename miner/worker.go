@@ -1091,8 +1091,6 @@ func (w *worker) mergeBundles(bundles []simulatedBundle, parent *types.Block, he
 	}
 	gasPool := new(core.GasPool).AddGas(header.GasLimit)
 	gasPool.SubGas(params.SystemTxsGas)
-	prevState := state
-	prevGasPool := gasPool
 
 	mergedBundle := simulatedBundle{
 		totalEth:          new(big.Int),
@@ -1101,8 +1099,8 @@ func (w *worker) mergeBundles(bundles []simulatedBundle, parent *types.Block, he
 
 	count := 0
 	for _, bundle := range bundles {
-		prevState = state.Copy()
-		prevGasPool = new(core.GasPool).AddGas(gasPool.Gas())
+		prevState := state.Copy()
+		prevGasPool := new(core.GasPool).AddGas(gasPool.Gas())
 
 		// the floor gas price is 99/100 what was simulated at the top of the block
 		floorGasPrice := new(big.Int).Mul(bundle.mevGasPrice, big.NewInt(99))
@@ -1349,16 +1347,6 @@ func (w *worker) commitBundle(txs types.Transactions, coinbase common.Address, i
 		w.resubmitAdjustCh <- &intervalAdjust{inc: false}
 	}
 	return false
-}
-
-// copyReceipts makes a deep copy of the given receipts.
-func copyReceipts(receipts []*types.Receipt) []*types.Receipt {
-	result := make([]*types.Receipt, len(receipts))
-	for i, l := range receipts {
-		cpy := *l
-		result[i] = &cpy
-	}
-	return result
 }
 
 // postSideBlock fires a side chain event, only use it for testing.

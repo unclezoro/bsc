@@ -23,6 +23,7 @@ import (
 	"errors"
 	"fmt"
 	"math/big"
+
 	"github.com/ethereum/go-ethereum"
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/common/hexutil"
@@ -579,7 +580,7 @@ func (ec *Client) SendTransaction(ctx context.Context, tx *types.Transaction) er
 	return ec.c.CallContext(ctx, nil, "eth_sendRawTransaction", hexutil.Encode(data))
 }
 
-func (ec * Client) SendBundle(ctx context.Context, txs types.Transactions, maxBlockNumber int64, maxTime, minTime uint64, reverseHash []common.Hash) (common.Hash, error) {
+func (ec *Client) SendBundle(ctx context.Context, txs types.Transactions, maxBlockNumber int64, maxTime, minTime uint64, reverseHash []common.Hash) (common.Hash, error) {
 	txNum := len(txs)
 	var hash common.Hash
 	bundle := ethapi.SendBundleArgs{

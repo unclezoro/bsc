@@ -743,10 +743,10 @@ func (w *worker) updateSnapshot() {
 	w.snapshotState = w.current.state.Copy()
 }
 
-func (w *worker) commitTransaction(tx *types.Transaction, coinbase common.Address) ([]*types.Log, error) {
+func (w *worker) commitTransaction(tx *types.Transaction, coinbase common.Address, receiptProcessors ...core.ReceiptProcessor) ([]*types.Log, error) {
 	snap := w.current.state.Snapshot()
 
-	receipt, err := core.ApplyTransaction(w.chainConfig, w.chain, &coinbase, w.current.gasPool, w.current.state, w.current.header, tx, &w.current.header.GasUsed, *w.chain.GetVMConfig())
+	receipt, err := core.ApplyTransaction(w.chainConfig, w.chain, &coinbase, w.current.gasPool, w.current.state, w.current.header, tx, &w.current.header.GasUsed, *w.chain.GetVMConfig(), receiptProcessors...)
 	if err != nil {
 		w.current.state.RevertToSnapshot(snap)
 		return nil, err
@@ -778,6 +778,14 @@ func (w *worker) commitTransactions(txs *types.TransactionsByPriceAndNonce, coin
 		log.Debug("Time left for mining work", "left", (*delay - w.config.DelayLeftOver).String(), "leftover", w.config.DelayLeftOver)
 		defer stopTimer.Stop()
 	}
+
+	// initilise bloom processors
+	processorCapacity := 100
+	if txs.CurrentSize() < processorCapacity {
+		processorCapacity = txs.CurrentSize()
+	}
+	bloomProcessors := core.NewAsyncReceiptBloomGenerator(processorCapacity)
+
 LOOP:
 	for {
 		// In the following three cases, we will interrupt the execution of the transaction.
@@ -833,7 +841,7 @@ LOOP:
 		// Start executing the transaction
 		w.current.state.Prepare(tx.Hash(), common.Hash{}, w.current.tcount)
 
-		logs, err := w.commitTransaction(tx, coinbase)
+		logs, err := w.commitTransaction(tx, coinbase, bloomProcessors)
 		switch {
 		case errors.Is(err, core.ErrGasLimitReached):
 			// Pop the current out-of-gas transaction without shifting in the next from the account
@@ -868,6 +876,7 @@ LOOP:
 			txs.Shift()
 		}
 	}
+	bloomProcessors.Close()
 
 	if !w.isRunning() && len(coalescedLogs) > 0 {
 		// We don't push the pendingLogsEvent while we are mining. The reason is that
@@ -1082,8 +1091,6 @@ func (w *worker) mergeBundles(bundles []simulatedBundle, parent *types.Block, he
 	}
 	gasPool := new(core.GasPool).AddGas(header.GasLimit)
 	gasPool.SubGas(params.SystemTxsGas)
-	prevState := state
-	prevGasPool := gasPool
 
 	mergedBundle := simulatedBundle{
 		totalEth:          new(big.Int),
@@ -1092,8 +1099,8 @@ func (w *worker) mergeBundles(bundles []simulatedBundle, parent *types.Block, he
 
 	count := 0
 	for _, bundle := range bundles {
-		prevState = state.Copy()
-		prevGasPool = new(core.GasPool).AddGas(gasPool.Gas())
+		prevState := state.Copy()
+		prevGasPool := new(core.GasPool).AddGas(gasPool.Gas())
 
 		// the floor gas price is 99/100 what was simulated at the top of the block
 		floorGasPrice := new(big.Int).Mul(bundle.mevGasPrice, big.NewInt(99))
@@ -1340,16 +1347,6 @@ func (w *worker) commitBundle(txs types.Transactions, coinbase common.Address, i
 		w.resubmitAdjustCh <- &intervalAdjust{inc: false}
 	}
 	return false
-}
-
-// copyReceipts makes a deep copy of the given receipts.
-func copyReceipts(receipts []*types.Receipt) []*types.Receipt {
-	result := make([]*types.Receipt, len(receipts))
-	for i, l := range receipts {
-		cpy := *l
-		result[i] = &cpy
-	}
-	return result
 }
 
 // postSideBlock fires a side chain event, only use it for testing.

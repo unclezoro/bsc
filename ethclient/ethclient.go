@@ -23,6 +23,7 @@ import (
 	"errors"
 	"fmt"
 	"math/big"
+
 	"github.com/ethereum/go-ethereum"
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/common/hexutil"
@@ -184,6 +185,20 @@ func (ec *Client) HeaderByNumber(ctx context.Context, number *big.Int) (*types.H
 		err = ethereum.NotFound
 	}
 	return head, err
+}
+
+// GetDiffAccounts returns changed accounts in a specific block number.
+func (ec *Client) GetDiffAccounts(ctx context.Context, number *big.Int) ([]common.Address, error) {
+	accounts := make([]common.Address, 0)
+	err := ec.c.CallContext(ctx, &accounts, "eth_getDiffAccounts", toBlockNumArg(number))
+	return accounts, err
+}
+
+// GetDiffAccountsWithScope returns detailed changes of some interested accounts in a specific block number.
+func (ec *Client) GetDiffAccountsWithScope(ctx context.Context, number *big.Int, accounts []common.Address) (*types.DiffAccountsInBlock, error) {
+	var result types.DiffAccountsInBlock
+	err := ec.c.CallContext(ctx, &result, "eth_getDiffAccountsWithScope", toBlockNumArg(number), accounts)
+	return &result, err
 }
 
 type rpcTransaction struct {
@@ -565,7 +580,7 @@ func (ec *Client) SendTransaction(ctx context.Context, tx *types.Transaction) er
 	return ec.c.CallContext(ctx, nil, "eth_sendRawTransaction", hexutil.Encode(data))
 }
 
-func (ec * Client) SendBundle(ctx context.Context, txs types.Transactions, maxBlockNumber int64, maxTime, minTime uint64, reverseHash []common.Hash) (common.Hash, error) {
+func (ec *Client) SendBundle(ctx context.Context, txs types.Transactions, maxBlockNumber int64, maxTime, minTime uint64, reverseHash []common.Hash) (common.Hash, error) {
 	txNum := len(txs)
 	var hash common.Hash
 	bundle := ethapi.SendBundleArgs{

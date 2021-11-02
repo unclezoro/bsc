@@ -249,6 +249,7 @@ func New(stack *node.Node, config *ethconfig.Config) (*Ethereum, error) {
 
 	eth.miner = miner.New(eth, &config.Miner, chainConfig, eth.EventMux(), eth.engine, eth.isLocalBlock)
 	eth.miner.SetExtra(makeExtraData(config.Miner.ExtraData))
+	eth.txPool.SetBundleSimulator(eth.miner)
 
 	gpoParams := config.GPO
 	if gpoParams.Default == nil {

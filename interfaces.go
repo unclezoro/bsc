@@ -59,7 +59,7 @@ type ChainReader interface {
 	TransactionCount(ctx context.Context, blockHash common.Hash) (uint, error)
 	TransactionInBlock(ctx context.Context, blockHash common.Hash, index uint) (*types.Transaction, error)
 
-	// This method subscribes to notifications about changes of the head block of
+	// SubscribeNewHead This method subscribes to notifications about changes of the head block of
 	// the canonical chain.
 	SubscribeNewHead(ctx context.Context, ch chan<- *types.Header) (Subscription, error)
 }
@@ -172,6 +172,10 @@ type LogFilterer interface {
 // next available nonce using PendingNonceAt.
 type TransactionSender interface {
 	SendTransaction(ctx context.Context, tx *types.Transaction) error
+}
+
+type BundleSender interface {
+	SendBundle(ctx context.Context, txs types.Transactions, maxBlockNumber int64, maxTime, minTime uint64, reverseHash []common.Hash) (common.Hash, error)
 }
 
 // GasPricer wraps the gas price oracle, which monitors the blockchain to determine the

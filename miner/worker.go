@@ -1295,7 +1295,7 @@ func (w *worker) commitBundle(txs types.Transactions, coinbase common.Address, i
 		// Start executing the transaction
 		w.current.state.Prepare(tx.Hash(), common.Hash{}, w.current.tcount)
 
-		logs, err := w.commitTransaction(tx, coinbase)
+		logs, err := w.commitTransaction(tx, coinbase, core.NewReceiptBloomGenerator())
 		switch err {
 		case core.ErrGasLimitReached:
 			// Pop the current out-of-gas transaction without shifting in the next from the account

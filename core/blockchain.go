@@ -478,6 +478,9 @@ func (bc *BlockChain) cacheReceipts(hash common.Hash, receipts types.Receipts) {
 }
 
 func (bc *BlockChain) cacheDiffLayer(diffLayer *types.DiffLayer) {
+	if bc.diffLayerCache.Len() >= diffLayerCacheLimit {
+		bc.diffLayerCache.RemoveOldest()
+	}
 	bc.diffLayerCache.Add(diffLayer.BlockHash, diffLayer)
 	if bc.db.DiffStore() != nil {
 		// push to priority queue before persisting

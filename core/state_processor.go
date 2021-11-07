@@ -43,8 +43,8 @@ import (
 
 const (
 	fullProcessCheck       = 21 // On diff sync mode, will do full process every fullProcessCheck randomly
-	recentTime             = 2048 * 3
-	recentDiffLayerTimeout = 20
+	recentTime             = 1024 * 3
+	recentDiffLayerTimeout = 5
 	farDiffLayerTimeout    = 2
 )
 

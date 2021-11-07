@@ -43,8 +43,8 @@ import (
 
 const (
 	fullProcessCheck       = 21 // On diff sync mode, will do full process every fullProcessCheck randomly
-	recentTime             = 2048 * 3
-	recentDiffLayerTimeout = 20
+	recentTime             = 1024 * 3
+	recentDiffLayerTimeout = 5
 	farDiffLayerTimeout    = 2
 )
 
@@ -68,15 +68,16 @@ func NewStateProcessor(config *params.ChainConfig, bc *BlockChain, engine consen
 }
 
 type LightStateProcessor struct {
-	randomGenerator *rand.Rand
+	check int64
 	StateProcessor
 }
 
 func NewLightStateProcessor(config *params.ChainConfig, bc *BlockChain, engine consensus.Engine) *LightStateProcessor {
 	randomGenerator := rand.New(rand.NewSource(int64(time.Now().Nanosecond())))
+	check := randomGenerator.Int63n(fullProcessCheck)
 	return &LightStateProcessor{
-		randomGenerator: randomGenerator,
-		StateProcessor:  *NewStateProcessor(config, bc, engine),
+		check:          check,
+		StateProcessor: *NewStateProcessor(config, bc, engine),
 	}
 }
 
@@ -86,7 +87,7 @@ func (p *LightStateProcessor) Process(block *types.Block, statedb *state.StateDB
 		allowLightProcess = posa.AllowLightProcess(p.bc, block.Header())
 	}
 	// random fallback to full process
-	if check := p.randomGenerator.Int63n(fullProcessCheck); allowLightProcess && check != 0 && len(block.Transactions()) != 0 {
+	if allowLightProcess && block.NumberU64()%fullProcessCheck != uint64(p.check) && len(block.Transactions()) != 0 {
 		var pid string
 		if peer, ok := block.ReceivedFrom.(PeerIDer); ok {
 			pid = peer.ID()
@@ -103,6 +104,9 @@ func (p *LightStateProcessor) Process(block *types.Block, statedb *state.StateDB
 				break
 			}
 			time.Sleep(time.Millisecond)
+		}
+		if diffLayer == nil {
+			log.Info("=== failed to find diff layer", "num", block.NumberU64())
 		}
 		if diffLayer != nil {
 			if err := diffLayer.Receipts.DeriveFields(p.bc.chainConfig, block.Hash(), block.NumberU64(), block.Transactions()); err != nil {

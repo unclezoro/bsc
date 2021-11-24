@@ -970,9 +970,11 @@ func (w *worker) commitNewWork(interrupt *int32, noempty bool, timestamp int64) 
 	if err != nil {
 		log.Error("Failed to fetch pending transactions", "err", err)
 	}
-	if w.config.IsFlashbots {
+	// only commit bundle when the fork chance is small, try our best to avoid
+	if w.config.IsFlashbots && header.Difficulty.Cmp(big.NewInt(1)) > 0 {
 		commitBundles := func() {
 			if w.current == nil {
+
 				return
 			}
 

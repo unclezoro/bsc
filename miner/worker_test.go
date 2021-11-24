@@ -17,6 +17,7 @@
 package miner
 
 import (
+	"crypto/ecdsa"
 	"math/big"
 	"math/rand"
 	"sync/atomic"
@@ -57,6 +58,10 @@ var (
 	testBankKey, _  = crypto.GenerateKey()
 	testBankAddress = crypto.PubkeyToAddress(testBankKey.PublicKey)
 	testBankFunds   = big.NewInt(1000000000000000000)
+
+	testBankKey2, _  = crypto.GenerateKey()
+	testBankAddress2 = crypto.PubkeyToAddress(testBankKey2.PublicKey)
+	testBankFunds2   = big.NewInt(1000000000000000000)
 
 	testUserKey, _  = crypto.GenerateKey()
 	testUserAddress = crypto.PubkeyToAddress(testUserKey.PublicKey)
@@ -103,6 +108,12 @@ func init() {
 	rand.Seed(time.Now().UnixNano())
 }
 
+type dummySimulator struct{}
+
+func (d *dummySimulator) SimulateBundle(bundle types.MevBundle) (*big.Int, error) {
+	return big.NewInt(0), nil
+}
+
 // testWorkerBackend implements worker.Backend interfaces and wraps all information needed during the testing.
 type testWorkerBackend struct {
 	db         ethdb.Database
@@ -116,7 +127,7 @@ type testWorkerBackend struct {
 func newTestWorkerBackend(t *testing.T, chainConfig *params.ChainConfig, engine consensus.Engine, db ethdb.Database, n int) *testWorkerBackend {
 	var gspec = core.Genesis{
 		Config: chainConfig,
-		Alloc:  core.GenesisAlloc{testBankAddress: {Balance: testBankFunds}},
+		Alloc:  core.GenesisAlloc{testBankAddress: {Balance: testBankFunds}, testBankAddress2: {Balance: testBankFunds2}},
 	}
 
 	switch e := engine.(type) {
@@ -180,12 +191,12 @@ func (b *testWorkerBackend) newRandomUncle() *types.Block {
 	return blocks[0]
 }
 
-func (b *testWorkerBackend) newRandomTx(creation bool) *types.Transaction {
+func (b *testWorkerBackend) newRandomTx(creation bool, addr common.Address, key *ecdsa.PrivateKey) *types.Transaction {
 	var tx *types.Transaction
 	if creation {
-		tx, _ = types.SignTx(types.NewContractCreation(b.txPool.Nonce(testBankAddress), big.NewInt(0), testGas, nil, common.FromHex(testCode)), types.HomesteadSigner{}, testBankKey)
+		tx, _ = types.SignTx(types.NewContractCreation(b.txPool.Nonce(addr), big.NewInt(0), testGas, big.NewInt(1), common.FromHex(testCode)), types.HomesteadSigner{}, key)
 	} else {
-		tx, _ = types.SignTx(types.NewTransaction(b.txPool.Nonce(testBankAddress), testUserAddress, big.NewInt(1000), params.TxGas, nil, nil), types.HomesteadSigner{}, testBankKey)
+		tx, _ = types.SignTx(types.NewTransaction(b.txPool.Nonce(addr), testUserAddress, big.NewInt(1000), params.TxGas, big.NewInt(1), nil), types.HomesteadSigner{}, key)
 	}
 	return tx
 }
@@ -199,14 +210,18 @@ func newTestWorker(t *testing.T, chainConfig *params.ChainConfig, engine consens
 }
 
 func TestGenerateBlockAndImportEthash(t *testing.T) {
-	testGenerateBlockAndImport(t, false)
+	testGenerateBlockAndImport(t, false, false)
 }
 
 func TestGenerateBlockAndImportClique(t *testing.T) {
-	testGenerateBlockAndImport(t, true)
+	testGenerateBlockAndImport(t, true, false)
 }
 
-func testGenerateBlockAndImport(t *testing.T, isClique bool) {
+func TestGenerateBlockAndImportCliqueWithMev(t *testing.T) {
+	testGenerateBlockAndImport(t, true, true)
+}
+
+func testGenerateBlockAndImport(t *testing.T, isClique, mev bool) {
 	var (
 		engine      consensus.Engine
 		chainConfig *params.ChainConfig
@@ -222,6 +237,12 @@ func testGenerateBlockAndImport(t *testing.T, isClique bool) {
 	}
 
 	w, b := newTestWorker(t, chainConfig, engine, db, 0)
+	if mev {
+		w.config.IsFlashbots = true
+		w.config.MaxSimulatBundles = 100
+		w.config.MevGasPriceFloor = 0
+		b.txPool.SetBundleSimulator(&dummySimulator{})
+	}
 	defer w.close()
 
 	// This test chain imports the mined blocks.
@@ -242,9 +263,15 @@ func testGenerateBlockAndImport(t *testing.T, isClique bool) {
 	// Start mining!
 	w.start()
 
+	if mev {
+		_, err := b.txPool.AddMevBundle([]*types.Transaction{b.newRandomTx(false, testBankAddress2, testBankKey2)}, nil, 0, 0, nil)
+		if err != nil {
+			t.Fatalf("add mev failed %v", err)
+		}
+	}
 	for i := 0; i < 5; i++ {
-		b.txPool.AddLocal(b.newRandomTx(true))
-		b.txPool.AddLocal(b.newRandomTx(false))
+		b.txPool.AddLocal(b.newRandomTx(true, testBankAddress, testBankKey))
+		b.txPool.AddLocal(b.newRandomTx(false, testBankAddress, testBankKey))
 		w.postSideBlock(core.ChainSideEvent{Block: b.newRandomUncle()})
 		w.postSideBlock(core.ChainSideEvent{Block: b.newRandomUncle()})
 

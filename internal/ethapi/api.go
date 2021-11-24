@@ -59,7 +59,6 @@ const (
 	MaxBundleTimeDelay  = 60 * 60 // second
 	MaxOracleBlocks     = 21
 	DropBlocks          = 3
-	MaxGasUsedRatio     = 90
 )
 
 // PublicEthereumAPI provides an API to access Ethereum related information.
@@ -2539,14 +2538,6 @@ func (s *PrivateTxBundleAPI) SendBundle(ctx context.Context, args SendBundleArgs
 	}
 	if len(validGasUsedRatio) == 0 {
 		return common.Hash{}, errors.New("no enough example ratio")
-	}
-	var totalRatio int
-	for _, ratio := range validGasUsedRatio {
-		totalRatio += ratio
-	}
-	averageRatio := totalRatio / len(validGasUsedRatio)
-	if averageRatio >= MaxGasUsedRatio {
-		return common.Hash{}, errors.New("the network is congested, please try later")
 	}
 
 	var txs types.Transactions

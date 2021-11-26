@@ -1061,7 +1061,7 @@ func (bc *BlockChain) HasBlockAndState(hash common.Hash, number uint64) bool {
 	if block == nil {
 		return false
 	}
-	return bc.HasState(block.Root())
+	return true
 }
 
 // GetBlock retrieves a block from the database by hash and number,
@@ -2044,6 +2044,7 @@ func (bc *BlockChain) insertChain(chain types.Blocks, verifySeals bool) (int, er
 			parent = bc.GetHeader(block.ParentHash(), block.NumberU64()-1)
 		}
 		statedb, err := state.New(parent.Root, bc.stateCache, bc.snaps)
+		statedb.SetRoot(block.Root())
 		if err != nil {
 			return it.index, err
 		}

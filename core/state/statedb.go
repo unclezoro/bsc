@@ -76,6 +76,7 @@ type StateDB struct {
 	db             Database
 	prefetcher     *triePrefetcher
 	originalRoot   common.Hash // The pre-state root, before any changes were made
+	currentRoot    common.Hash
 	trie           Trie
 	hasher         crypto.KeccakState
 	diffLayer      *types.DiffLayer
@@ -173,22 +174,17 @@ func newStateDB(root common.Hash, db Database, snaps *snapshot.Tree) (*StateDB, 
 // state trie concurrently while the state is mutated so that when we reach the
 // commit phase, most of the needed data is already hot.
 func (s *StateDB) StartPrefetcher(namespace string) {
-	if s.prefetcher != nil {
-		s.prefetcher.close()
-		s.prefetcher = nil
-	}
-	if s.snap != nil {
-		s.prefetcher = newTriePrefetcher(s.db, s.originalRoot, namespace)
-	}
+	return
 }
 
 // StopPrefetcher terminates a running prefetcher and reports any leftover stats
 // from the gathered metrics.
 func (s *StateDB) StopPrefetcher() {
-	if s.prefetcher != nil {
-		s.prefetcher.close()
-		s.prefetcher = nil
-	}
+	return
+}
+
+func (s *StateDB) SetRoot(root common.Hash) {
+	s.currentRoot = root
 }
 
 // Mark that the block is processed by diff layer
@@ -504,36 +500,10 @@ func (s *StateDB) Suicide(addr common.Address) bool {
 
 // updateStateObject writes the given object to the trie.
 func (s *StateDB) updateStateObject(obj *StateObject) {
-	// Track the amount of time wasted on updating the account from the trie
-	if metrics.EnabledExpensive {
-		defer func(start time.Time) { s.AccountUpdates += time.Since(start) }(time.Now())
-	}
-	// Encode the account and update the account trie
-	addr := obj.Address()
-	data := obj.encodeData
-	var err error
-	if data == nil {
-		data, err = rlp.EncodeToBytes(obj)
-		if err != nil {
-			panic(fmt.Errorf("can't encode object at %x: %v", addr[:], err))
-		}
-	}
-	if err = s.trie.TryUpdate(addr[:], data); err != nil {
-		s.setError(fmt.Errorf("updateStateObject (%x) error: %v", addr[:], err))
-	}
 }
 
 // deleteStateObject removes the given object from the state trie.
 func (s *StateDB) deleteStateObject(obj *StateObject) {
-	// Track the amount of time wasted on deleting the account from the trie
-	if metrics.EnabledExpensive {
-		defer func(start time.Time) { s.AccountUpdates += time.Since(start) }(time.Now())
-	}
-	// Delete the account from the trie
-	addr := obj.Address()
-	if err := s.trie.TryDelete(addr[:]); err != nil {
-		s.setError(fmt.Errorf("deleteStateObject (%x) error: %v", addr[:], err))
-	}
 }
 
 // getStateObject retrieves a state object given by the address, returning nil if
@@ -959,7 +929,7 @@ func (s *StateDB) Finalise(deleteEmptyObjects bool) {
 func (s *StateDB) IntermediateRoot(deleteEmptyObjects bool) common.Hash {
 	if s.lightProcessed {
 		s.StopPrefetcher()
-		return s.trie.Hash()
+		return s.currentRoot
 	}
 	// Finalise all the dirty storage states and write them into the tries
 	s.Finalise(deleteEmptyObjects)
@@ -1060,8 +1030,7 @@ func (s *StateDB) IntermediateRoot(deleteEmptyObjects bool) common.Hash {
 	if metrics.EnabledExpensive {
 		defer func(start time.Time) { s.AccountHashes += time.Since(start) }(time.Now())
 	}
-	root := s.trie.Hash()
-	return root
+	return s.currentRoot
 }
 
 // Prepare sets the current transaction hash and index and block hash which is
@@ -1270,10 +1239,6 @@ func (s *StateDB) Commit(deleteEmptyObjects bool) (common.Hash, *types.DiffLayer
 							rawdb.WriteCode(codeWriter, common.BytesToHash(obj.CodeHash()), obj.code)
 							obj.dirtyCode = false
 						}
-						// Write any storage changes in the state object to its storage trie
-						if err := obj.CommitTrie(s.db); err != nil {
-							taskResults <- err
-						}
 						taskResults <- nil
 					}
 					tasksNum++
@@ -1292,32 +1257,9 @@ func (s *StateDB) Commit(deleteEmptyObjects bool) (common.Hash, *types.DiffLayer
 			if len(s.stateObjectsDirty) > 0 {
 				s.stateObjectsDirty = make(map[common.Address]struct{}, len(s.stateObjectsDirty)/2)
 			}
-			// Write the account trie changes, measuing the amount of wasted time
-			var start time.Time
-			if metrics.EnabledExpensive {
-				start = time.Now()
-			}
 			// The onleaf func is called _serially_, so we can reuse the same account
 			// for unmarshalling every time.
-			var account Account
-			root, err := s.trie.Commit(func(_ [][]byte, _ []byte, leaf []byte, parent common.Hash) error {
-				if err := rlp.DecodeBytes(leaf, &account); err != nil {
-					return nil
-				}
-				if account.Root != emptyRoot {
-					s.db.TrieDB().Reference(account.Root, parent)
-				}
-				return nil
-			})
-			if err != nil {
-				return err
-			}
-			if metrics.EnabledExpensive {
-				s.AccountCommits += time.Since(start)
-			}
-			if root != emptyRoot {
-				s.db.CacheAccount(root, s.trie)
-			}
+			root = s.currentRoot
 			wg.Wait()
 			return nil
 		},

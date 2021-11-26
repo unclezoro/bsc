@@ -19,7 +19,6 @@ package state
 import (
 	"errors"
 	"fmt"
-	"time"
 
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/core/rawdb"
@@ -154,7 +153,6 @@ func NewDatabaseWithConfigAndCache(db ethdb.Database, config *trie.Config) Datab
 		accountTrieCache: atc,
 		storageTrieCache: stc,
 	}
-	go database.purgeLoop()
 	return database
 }
 
@@ -171,27 +169,8 @@ type triePair struct {
 	trie Trie
 }
 
-func (db *cachingDB) purgeLoop() {
-	for {
-		time.Sleep(purgeInterval * time.Second)
-		_, accounts, ok := db.accountTrieCache.GetOldest()
-		if !ok {
-			continue
-		}
-		tr := accounts.(*trie.SecureTrie).GetRawTrie()
-		if tr.Size() > maxAccountTrieSize {
-			db.Purge()
-		}
-	}
-}
-
 // OpenTrie opens the main account trie at a specific root hash.
 func (db *cachingDB) OpenTrie(root common.Hash) (Trie, error) {
-	if db.accountTrieCache != nil {
-		if tr, exist := db.accountTrieCache.Get(root); exist {
-			return tr.(Trie).(*trie.SecureTrie).Copy(), nil
-		}
-	}
 	tr, err := trie.NewSecure(root, db.db)
 	if err != nil {
 		return nil, err
@@ -201,17 +180,6 @@ func (db *cachingDB) OpenTrie(root common.Hash) (Trie, error) {
 
 // OpenStorageTrie opens the storage trie of an account.
 func (db *cachingDB) OpenStorageTrie(addrHash, root common.Hash) (Trie, error) {
-	if db.storageTrieCache != nil {
-		if tries, exist := db.storageTrieCache.Get(addrHash); exist {
-			triesPairs := tries.([3]*triePair)
-			for _, triePair := range triesPairs {
-				if triePair != nil && triePair.root == root {
-					return triePair.trie.(*trie.SecureTrie).Copy(), nil
-				}
-			}
-		}
-	}
-
 	tr, err := trie.NewSecure(root, db.db)
 	if err != nil {
 		return nil, err

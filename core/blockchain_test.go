@@ -1820,9 +1820,13 @@ func TestPrunedImportSide(t *testing.T) {
 	//glogger.Verbosity(3)
 	//log.Root().SetHandler(log.Handler(glogger))
 	testSideImport(t, 3, 3)
+	time.Sleep(100 * time.Millisecond)
 	testSideImport(t, 3, -3)
+	time.Sleep(100 * time.Millisecond)
 	testSideImport(t, 10, 0)
+	time.Sleep(100 * time.Millisecond)
 	testSideImport(t, 1, 10)
+	time.Sleep(100 * time.Millisecond)
 	testSideImport(t, 1, -10)
 }
 

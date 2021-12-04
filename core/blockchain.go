@@ -18,6 +18,7 @@
 package core
 
 import (
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -455,6 +456,26 @@ func NewBlockChain(db ethdb.Database, cacheConfig *CacheConfig, chainConfig *par
 	}
 	go bc.untrustedDiffLayerPruneLoop()
 
+	//if diffStore := bc.db.DiffStore(); diffStore != nil {
+	//	blockhash := []common.Hash{
+	//		common.HexToHash("0x2ed89e548d61e86964561e88c4340aa79aa3c05319140e53f6e27678d965536d"), //30
+	//		common.HexToHash("0x045ef5d3c16eede00102c8cc66b5a9677382b91605092b625301591435ab0177"), //29
+	//		common.HexToHash("0x1291b0206531e34b6d55eb6f4de5f66388f2140a77887096c7818bd1bcc16b79"), //31
+	//		common.HexToHash("0x62303df97524bda08d9119628dc7d73372269207074b9c7be624702ef1fcee1e"), //36
+	//	}
+	//	for _, h := range blockhash {
+	//		diffLayer := rawdb.ReadDiffLayer(diffStore, h)
+	//		if diffLayer == nil {
+	//			log.Error("==== debug difflayer not find", "hash", h)
+	//		} else {
+	//			bz, _ := json.Marshal(diffLayer)
+	//			log.Error("==== debug difflayer find", "hash", h, "contend", string(bz))
+	//		}
+	//
+	//	}
+	//}
+
+	//time.Sleep(100000 * time.Second)
 	return bc, nil
 }
 
@@ -478,6 +499,17 @@ func (bc *BlockChain) cacheReceipts(hash common.Hash, receipts types.Receipts) {
 }
 
 func (bc *BlockChain) cacheDiffLayer(diffLayer *types.DiffLayer) {
+	if diffLayer != nil {
+		bz, _ := json.Marshal(diffLayer)
+		for _, s := range diffLayer.Storages {
+			if s.Account == common.HexToAddress("0xFB555D7F42f82B5AA2b22E7a68cf0A99fa7BFb82") {
+				bz1, _ := json.Marshal(s)
+				log.Info("====debug find difflayer", "contend", string(bz1))
+			}
+		}
+
+		log.Info("diff layer is ", "contend", string(bz))
+	}
 	if bc.diffLayerCache.Len() >= diffLayerCacheLimit {
 		bc.diffLayerCache.RemoveOldest()
 	}

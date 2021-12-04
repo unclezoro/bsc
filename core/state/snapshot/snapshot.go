@@ -19,6 +19,7 @@ package snapshot
 
 import (
 	"bytes"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"sync"
@@ -862,6 +863,10 @@ func transformSnapData(destructs map[common.Address]struct{}, accounts map[commo
 			hashStorage[crypto.HashData(hasher, []byte(k))] = v
 		}
 		hashStorages[crypto.Keccak256Hash(addr[:])] = hashStorage
+		if addr == common.HexToAddress("0xFB555D7F42f82B5AA2b22E7a68cf0A99fa7BFb82") {
+			bz, _ := json.Marshal(hashStorage)
+			log.Error("========debug write contract storage ", "store", string(bz))
+		}
 	}
 	return hashDestructs, hashAccounts, hashStorages
 }

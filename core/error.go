@@ -75,3 +75,21 @@ var (
 	// current network configuration.
 	ErrTxTypeNotSupported = types.ErrTxTypeNotSupported
 )
+
+type CustomError struct {
+	msg  string
+	code int
+}
+
+func NewCustomError(msg string, code int) *CustomError {
+	return &CustomError{
+		msg:  msg,
+		code: code,
+	}
+}
+
+func (e *CustomError) ErrorCode() int { return e.code }
+
+func (e *CustomError) Error() string {
+	return e.msg
+}

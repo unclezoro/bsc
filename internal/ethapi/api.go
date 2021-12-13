@@ -22,7 +22,6 @@ import (
 	"errors"
 	"fmt"
 	"math/big"
-	"sort"
 	"strings"
 	"time"
 
@@ -55,10 +54,12 @@ import (
 
 const (
 	UnHealthyTimeout    = 5 * time.Second
-	MaxBundleBlockDelay = 1200
-	MaxBundleTimeDelay  = 60 * 60 // second
+	MaxBundleBlockDelay = 100
+	MaxBundleTimeDelay  = 5 * 60 // second
 	MaxOracleBlocks     = 21
 	DropBlocks          = 3
+
+	InvalidBundleParamError = -38000
 )
 
 // PublicEthereumAPI provides an API to access Ethereum related information.
@@ -2521,28 +2522,10 @@ func (s *PrivateTxBundleAPI) BundlePrice(ctx context.Context) (*big.Int, error) 
 // SendBundle will add the signed transaction to the transaction pool.
 // The sender is responsible for signing the transaction and using the correct nonce and ensuring validity
 func (s *PrivateTxBundleAPI) SendBundle(ctx context.Context, args SendBundleArgs) (common.Hash, error) {
-	gasUsedRatio := make([]int, 0, MaxOracleBlocks)
-	block := s.b.CurrentBlock()
-	var err error
-	for i := 0; i < MaxOracleBlocks && block.NumberU64() > 1; i++ {
-		gasUsedRatio = append(gasUsedRatio, int(block.GasUsed()*100/block.GasLimit()))
-		block, err = s.b.BlockByHash(context.Background(), block.ParentHash())
-		if err != nil {
-			break
-		}
-	}
-	sort.Ints(gasUsedRatio)
-	validGasUsedRatio := gasUsedRatio
-	if len(gasUsedRatio) > DropBlocks {
-		validGasUsedRatio = gasUsedRatio[DropBlocks:]
-	}
-	if len(validGasUsedRatio) == 0 {
-		return common.Hash{}, errors.New("no enough example ratio")
-	}
 
 	var txs types.Transactions
 	if len(args.Txs) == 0 {
-		return common.Hash{}, errors.New("bundle missing txs")
+		return common.Hash{}, core.NewCustomError("bundle missing txs", InvalidBundleParamError)
 	}
 	if args.MaxBlockNumber == 0 && (args.MaxTimestamp == nil || *args.MaxTimestamp == 0) {
 		maxTimeStamp := uint64(time.Now().Unix()) + MaxBundleTimeDelay
@@ -2550,19 +2533,20 @@ func (s *PrivateTxBundleAPI) SendBundle(ctx context.Context, args SendBundleArgs
 	}
 	currentBlock := s.b.CurrentBlock()
 	if args.MaxBlockNumber != 0 && args.MaxBlockNumber.Int64() > int64(currentBlock.NumberU64())+MaxBundleBlockDelay {
-		return common.Hash{}, errors.New("the maxBlockNumber should not be lager than currentBlockNum + 1200")
+		return common.Hash{}, core.NewCustomError("the maxBlockNumber should not be lager than currentBlockNum + 100", InvalidBundleParamError)
 	}
 	if args.MaxTimestamp != nil && *args.MaxTimestamp > currentBlock.Time()+uint64(MaxBundleTimeDelay) {
-		return common.Hash{}, errors.New("the maxTimestamp should not be later than currentBlockTimestamp + 1 hour")
+		return common.Hash{}, core.NewCustomError("the maxTimestamp should not be later than currentBlockTimestamp + 5 minutes", InvalidBundleParamError)
 	}
 	if args.MaxTimestamp != nil && args.MinTimestamp != nil && *args.MaxTimestamp != 0 && *args.MinTimestamp != 0 {
 		if *args.MaxTimestamp <= *args.MinTimestamp {
-			return common.Hash{}, errors.New("the maxTimestamp should not be less than minTimestamp")
+			return common.Hash{}, core.NewCustomError("the maxTimestamp should not be less than minTimestamp", InvalidBundleParamError)
 		}
 	}
 	if args.MinTimestamp != nil && *args.MinTimestamp > currentBlock.Time()+uint64(MaxBundleTimeDelay) {
-		return common.Hash{}, errors.New("the minTimestamp should not be later than currentBlockTimestamp + 1 hour")
+		return common.Hash{}, core.NewCustomError("the minTimestamp should not be later than currentBlockTimestamp + 5 minutes", InvalidBundleParamError)
 	}
+
 	for _, encodedTx := range args.Txs {
 		tx := new(types.Transaction)
 		if err := tx.UnmarshalBinary(encodedTx); err != nil {

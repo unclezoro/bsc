@@ -18,6 +18,7 @@ package core
 
 import (
 	"errors"
+	"fmt"
 	"math"
 	"math/big"
 	"sort"
@@ -53,6 +54,9 @@ const (
 	// more expensive to propagate; larger transactions also take more resources
 	// to validate whether they fit into the pool or not.
 	txMaxSize = 4 * txSlotSize // 128KB
+
+	// Bundle Error Code
+	GasPriceTooLowErrorCode = -38011
 )
 
 var (
@@ -88,8 +92,10 @@ var (
 	// making the transaction invalid, rather a DOS protection.
 	ErrOversizedData = errors.New("oversized data")
 
-	// ErrorBundlePoolIsFull is returned if the number of bundle exceed the limit
-	ErrorBundlePoolIsFull = errors.New("bundle pool is full")
+	BundleAlreadyExistError = NewCustomError("bundle already exist", -38001)
+	BundlePoolFullError     = NewCustomError("bundle pool is full", -38002)
+	SimulatorMissingError   = NewCustomError("bundle simulator is missing", -38003)
+	DifferentSendersError   = NewCustomError("only one tx sender is allowed within one bundle", -38010)
 )
 
 var (
@@ -574,10 +580,29 @@ func (pool *TxPool) PruneBundle(bundle common.Hash) {
 	delete(pool.mevBundles, bundle)
 }
 
+// For testing
+func (pool *TxPool) SetBundle(bundleHash common.Hash, bundle *types.MevBundle) {
+	pool.mu.Lock()
+	defer pool.mu.Unlock()
+	pool.mevBundles[bundleHash] = bundle
+}
+
 // AddMevBundle adds a mev bundle to the pool
 func (pool *TxPool) AddMevBundle(txs types.Transactions, maxBlockNumber *big.Int, minTimestamp, maxTimestamp uint64, revertingTxHashes []common.Hash) (common.Hash, error) {
+	senders := make(map[common.Address]bool)
+	for _, tx := range txs {
+		txSender, _ := types.Sender(pool.signer, tx)
+		senders[txSender] = true
+		if tx.GasPrice() == nil || tx.GasPrice().Cmp(big.NewInt(int64(pool.config.PriceLimit))) < 0 {
+			return common.Hash{}, NewCustomError(fmt.Sprintf("tx gas price too low, expected %d at least", pool.config.PriceLimit), GasPriceTooLowErrorCode)
+		}
+		if len(senders) > 1 {
+			return common.Hash{}, DifferentSendersError
+		}
+	}
+
 	if pool.simulator == nil {
-		return common.Hash{}, errors.New("bundle simulator is nil")
+		return common.Hash{}, SimulatorMissingError
 	}
 	bundle := types.MevBundle{
 		Txs:               txs,
@@ -600,7 +625,7 @@ func (pool *TxPool) AddMevBundle(txs types.Transactions, maxBlockNumber *big.Int
 	pool.mu.Lock()
 	defer pool.mu.Unlock()
 	if _, ok := pool.mevBundles[hash]; ok {
-		return common.Hash{}, errors.New("bundle already exist")
+		return common.Hash{}, BundleAlreadyExistError
 	}
 	if len(pool.mevBundles) > int(pool.config.BundleSlot) {
 		leastPrice := big.NewInt(math.MaxInt64)
@@ -612,7 +637,7 @@ func (pool *TxPool) AddMevBundle(txs types.Transactions, maxBlockNumber *big.Int
 			}
 		}
 		if bundle.Price.Cmp(leastPrice) < 0 {
-			return common.Hash{}, ErrorBundlePoolIsFull
+			return common.Hash{}, BundlePoolFullError
 		}
 		delete(pool.mevBundles, leastBundleHash)
 	}

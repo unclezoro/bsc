@@ -249,7 +249,7 @@ func (b *EthAPIBackend) SendBundle(ctx context.Context, txs types.Transactions, 
 
 func (b *EthAPIBackend) BundlePrice() (*big.Int, error) {
 	bundles := b.eth.txPool.AllMevBundles()
-	if len(bundles) == 0 {
+	if len(bundles) < b.eth.config.Miner.MaxSimulatBundles/2 {
 		return big.NewInt(b.eth.config.Miner.MevGasPriceFloor), nil
 	}
 	sort.SliceStable(bundles, func(i, j int) bool {

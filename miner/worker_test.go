@@ -37,6 +37,7 @@ import (
 	"github.com/ethereum/go-ethereum/ethdb"
 	"github.com/ethereum/go-ethereum/event"
 	"github.com/ethereum/go-ethereum/params"
+	"github.com/ethereum/go-ethereum/rlp"
 )
 
 const (
@@ -221,6 +222,70 @@ func TestGenerateBlockAndImportCliqueWithMev(t *testing.T) {
 	testGenerateBlockAndImport(t, true, true)
 }
 
+func TestBundlePrune(t *testing.T) {
+	var (
+		engine      consensus.Engine
+		chainConfig *params.ChainConfig
+		db          = rawdb.NewMemoryDatabase()
+	)
+	chainConfig = params.AllCliqueProtocolChanges
+	chainConfig.Clique = &params.CliqueConfig{Period: 1, Epoch: 30000}
+	engine = clique.New(chainConfig.Clique, db)
+
+	w, b := newTestWorker(t, chainConfig, engine, db, 0)
+	w.config.IsFlashbots = true
+	w.config.MaxSimulatBundles = 100
+	w.config.MevGasPriceFloor = 3
+	b.txPool.SetBundleSimulator(&dummySimulator{})
+	go w.bundlePruneLoop()
+	defer w.close()
+
+	db2 := rawdb.NewMemoryDatabase()
+	b.genesis.MustCommit(db2)
+	chain, _ := core.NewBlockChain(db2, nil, b.chain.Config(), engine, vm.Config{}, nil, nil)
+	defer chain.Stop()
+
+	// Ignore empty commit here for less noise.
+	w.skipSealHook = func(task *task) bool {
+		return len(task.receipts) == 0
+	}
+
+	// Wait for mined blocks.
+	sub := w.mux.Subscribe(core.NewMinedBlockEvent{})
+	defer sub.Unsubscribe()
+
+	// Start mining!
+	w.start()
+
+	falseGasPriceTx, _ := types.SignTx(types.NewTransaction(b.txPool.Nonce(testBankAddress2), testUserAddress, big.NewInt(1000), params.TxGas, big.NewInt(1), nil), types.HomesteadSigner{}, testBankKey2)
+	falseNonceTx, _ := types.SignTx(types.NewTransaction(b.txPool.Nonce(testBankAddress2)-1, testUserAddress, big.NewInt(1000), params.TxGas, big.NewInt(4), nil), types.HomesteadSigner{}, testBankKey2)
+
+	bundleTxs := []*types.Transaction{
+		falseGasPriceTx,
+		falseNonceTx,
+	}
+
+	for _, tx := range bundleTxs {
+		bundle := &types.MevBundle{
+			Txs:               []*types.Transaction{tx},
+			MaxBlockNumber:    nil,
+			MinTimestamp:      0,
+			MaxTimestamp:      0,
+			RevertingTxHashes: nil,
+		}
+
+		bz, _ := rlp.EncodeToBytes(bundle)
+		hash := crypto.Keccak256Hash(bz)
+		bundle.Hash = hash
+		b.txPool.SetBundle(hash, bundle)
+	}
+	time.Sleep(bundlePruneInterval + 1*time.Second)
+	bundles := b.txPool.AllMevBundles()
+	if len(bundles) != 0 {
+		t.Fatalf("unexpected bundle size, want %d, actaul %d", 0, len(bundles))
+	}
+}
+
 func testGenerateBlockAndImport(t *testing.T, isClique, mev bool) {
 	var (
 		engine      consensus.Engine
@@ -267,6 +332,21 @@ func testGenerateBlockAndImport(t *testing.T, isClique, mev bool) {
 		_, err := b.txPool.AddMevBundle([]*types.Transaction{b.newRandomTx(false, testBankAddress2, testBankKey2)}, nil, 0, 0, nil)
 		if err != nil {
 			t.Fatalf("add mev failed %v", err)
+		}
+		// Multiple sender should fail
+		_, err = b.txPool.AddMevBundle([]*types.Transaction{
+			b.newRandomTx(false, testBankAddress2, testBankKey2),
+			b.newRandomTx(false, testBankAddress, testBankKey),
+		}, nil, 0, 0, nil)
+		if err == nil || err.Error() != "only one tx sender is allowed within one bundle" {
+			t.Fatalf("Unexpected error %v", err)
+		}
+		// Invalid gas price
+		lowGastx, _ := types.SignTx(types.NewTransaction(b.txPool.Nonce(testBankAddress2), testUserAddress, big.NewInt(1000), params.TxGas, big.NewInt(0), nil), types.HomesteadSigner{}, testBankKey2)
+
+		_, err = b.txPool.AddMevBundle([]*types.Transaction{lowGastx}, nil, 0, 0, nil)
+		if err == nil || err.Error() != "tx gas price too low, expected 1 at least" {
+			t.Fatalf("Unexpected error %v", err)
 		}
 	}
 	for i := 0; i < 5; i++ {

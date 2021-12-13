@@ -79,10 +79,19 @@ const (
 
 	// staleThreshold is the maximum depth of the acceptable stale block.
 	staleThreshold = 11
+
+	// bundlePruneInterval is the interval to do bundle prune check
+	bundlePruneInterval = 3 * time.Second
+
+	// ErrorCode
+	SimulatorTxFailedErrorCode = -38006
 )
 
 var (
 	commitTxsTimer = metrics.NewRegisteredTimer("worker/committxs", nil)
+
+	SimulatorReceiptFailedError = core.NewCustomError("simulate tx success, while status of receipt is failed", -38004)
+	BundlePriceTooLowError      = core.NewCustomError("no enough gas price for the bundle", -38005)
 )
 
 // environment is the worker's current environment and holds all of the current state information.
@@ -241,6 +250,9 @@ func newWorker(config *Config, chainConfig *params.ChainConfig, engine consensus
 	go worker.newWorkLoop(recommit)
 	go worker.resultLoop()
 	go worker.taskLoop()
+	if worker.config.IsFlashbots {
+		go worker.bundlePruneLoop()
+	}
 
 	// Submit first work to initialize pending state.
 	if init {
@@ -542,6 +554,41 @@ func (w *worker) mainLoop() {
 		case <-w.chainHeadSub.Err():
 			return
 		case <-w.chainSideSub.Err():
+			return
+		}
+	}
+}
+
+func (w *worker) bundlePruneLoop() {
+	ticker := time.NewTicker(bundlePruneInterval)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-ticker.C:
+			parent := w.chain.CurrentBlock()
+			num := parent.Number()
+			header := &types.Header{
+				ParentHash: parent.Hash(),
+				Number:     num.Add(num, common.Big1),
+				GasLimit:   core.CalcGasLimit(parent, w.config.GasFloor, w.config.GasCeil),
+				Extra:      w.extra,
+				Time:       uint64(time.Now().Unix()),
+				Difficulty: big.NewInt(2),
+			}
+			pruneBundles := func() {
+				bundles, err := w.eth.TxPool().MevBundles(num.Add(num, common.Big1), uint64(time.Now().Unix()))
+				log.Info("Total bundles", "n", len(bundles))
+				if err != nil {
+					log.Error("Failed to fetch pending transactions", "err", err)
+					return
+				}
+				sort.SliceStable(bundles, func(i, j int) bool {
+					return bundles[j].Price.Cmp(bundles[i].Price) < 0
+				})
+				w.simulateBundles(bundles, w.coinbase, parent, header)
+			}
+			pruneBundles()
+		case <-w.exitCh:
 			return
 		}
 	}
@@ -979,7 +1026,7 @@ func (w *worker) commitNewWork(interrupt *int32, noempty bool, timestamp int64) 
 			}
 
 			bundles, err := w.eth.TxPool().MevBundles(header.Number, header.Time)
-			log.Error("Total bundles", "n", len(bundles))
+			log.Info("Total bundles", "n", len(bundles))
 			if err != nil {
 				log.Error("Failed to fetch pending transactions", "err", err)
 				return
@@ -1195,18 +1242,20 @@ func (w *worker) computeBundleGas(bundle types.MevBundle, parent *types.Block, h
 				if err == core.ErrGasLimitReached && !pruneGasExceed {
 					log.Warn("bundle gas limit exceed", "hash", bundle.Hash.String(), "err", err)
 				} else {
+
 					log.Warn("Prune bundle because of err", "hash", bundle.Hash.String(), "err", err)
 					w.eth.TxPool().PruneBundle(bundle.Hash)
 				}
 			}
-			return simulatedBundle{}, err
+			return simulatedBundle{}, core.NewCustomError(err.Error(), SimulatorTxFailedErrorCode)
 		}
 		if receipt.Status == types.ReceiptStatusFailed && !containsHash(bundle.RevertingTxHashes, receipt.TxHash) {
 			if prune {
 				log.Warn("Prune bundle because of failed tx", "hash", bundle.Hash.String())
+
 				w.eth.TxPool().PruneBundle(bundle.Hash)
 			}
-			return simulatedBundle{}, errors.New("failed tx")
+			return simulatedBundle{}, SimulatorReceiptFailedError
 		}
 
 		totalGasUsed += receipt.GasUsed
@@ -1228,7 +1277,7 @@ func (w *worker) computeBundleGas(bundle types.MevBundle, parent *types.Block, h
 			log.Warn("Prune bundle because of not enough gas price", "hash", bundle.Hash.String())
 			w.eth.TxPool().PruneBundle(bundle.Hash)
 		}
-		return simulatedBundle{}, errors.New("no enough gas price")
+		return simulatedBundle{}, BundlePriceTooLowError
 	}
 
 	return simulatedBundle{

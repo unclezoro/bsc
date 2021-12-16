@@ -76,6 +76,7 @@ type StateDB struct {
 	db             Database
 	prefetcher     *triePrefetcher
 	originalRoot   common.Hash // The pre-state root, before any changes were made
+	expectedRoot   common.Hash
 	trie           Trie
 	hasher         crypto.KeccakState
 	diffLayer      *types.DiffLayer
@@ -1029,6 +1030,9 @@ func (s *StateDB) IntermediateRoot(deleteEmptyObjects bool) common.Hash {
 	// Now we're about to start to write changes to the trie. The trie is so far
 	// _untouched_. We can check with the prefetcher, if it can give us a trie
 	// which has the same root, but also has some content loaded into it.
+	if s.snap != nil {
+		s.snap.WaitVerified()
+	}
 	if prefetcher != nil {
 		if trie := prefetcher.trie(s.originalRoot); trie != nil {
 			s.trie = trie
@@ -1081,8 +1085,11 @@ func (s *StateDB) clearJournalAndRefund() {
 	s.validRevisions = s.validRevisions[:0] // Snapshots can be created without journal entires
 }
 
-func (s *StateDB) LightCommit(root common.Hash) (common.Hash, *types.DiffLayer, error) {
+func (s *StateDB) LightCommit() (common.Hash, *types.DiffLayer, error) {
 	codeWriter := s.db.TrieDB().DiskDB().NewBatch()
+
+	// light process already verified it, expectedRoot is trustworthy.
+	root := s.expectedRoot
 
 	commitFuncs := []func() error{
 		func() error {
@@ -1171,7 +1178,8 @@ func (s *StateDB) LightCommit(root common.Hash) (common.Hash, *types.DiffLayer, 
 				}
 				// Only update if there's a state transition (skip empty Clique blocks)
 				if parent := s.snap.Root(); parent != root {
-					if err := s.snaps.Update(root, parent, s.snapDestructs, s.snapAccounts, s.snapStorage); err != nil {
+					// for light sync, always do sync commit
+					if err := s.snaps.Update(root, parent, s.snapDestructs, s.snapAccounts, s.snapStorage, nil); err != nil {
 						log.Warn("Failed to update snapshot tree", "from", parent, "to", root, "err", err)
 					}
 					// Keep n diff layers in the memory
@@ -1210,18 +1218,28 @@ func (s *StateDB) Commit(deleteEmptyObjects bool) (common.Hash, *types.DiffLayer
 		return common.Hash{}, nil, fmt.Errorf("commit aborted due to earlier error: %v", s.dbErr)
 	}
 	// Finalize any pending changes and merge everything into the tries
-	root := s.IntermediateRoot(deleteEmptyObjects)
 	if s.lightProcessed {
-		return s.LightCommit(root)
+		return s.LightCommit()
 	}
 	var diffLayer *types.DiffLayer
 	if s.snap != nil {
 		diffLayer = &types.DiffLayer{}
 	}
-	commitFuncs := []func() error{
-		func() error {
-			// Commit objects to the trie, measuring the elapsed time
-			tasks := make(chan func(batch ethdb.KeyValueWriter))
+	var verified chan struct{}
+	var snapUpdated chan struct{}
+	if s.snap != nil {
+		verified = make(chan struct{})
+		snapUpdated = make(chan struct{})
+	}
+
+	commmitTrie := func() error {
+		commitErr := func() error {
+			if root := s.IntermediateRoot(deleteEmptyObjects); s.expectedRoot != root {
+				return fmt.Errorf("invalid merkle root (remote: %x local: %x)", s.expectedRoot, root)
+			} else {
+				return nil
+			}
+			tasks := make(chan func())
 			taskResults := make(chan error, len(s.stateObjectsDirty))
 			tasksNum := 0
 			finishCh := make(chan struct{})
@@ -1232,17 +1250,11 @@ func (s *StateDB) Commit(deleteEmptyObjects bool) (common.Hash, *types.DiffLayer
 				wg.Add(1)
 				go func() {
 					defer wg.Done()
-					codeWriter := s.db.TrieDB().DiskDB().NewBatch()
 					for {
 						select {
 						case task := <-tasks:
-							task(codeWriter)
+							task()
 						case <-finishCh:
-							if codeWriter.ValueSize() > 0 {
-								if err := codeWriter.Write(); err != nil {
-									log.Crit("Failed to commit dirty codes", "error", err)
-								}
-							}
 							return
 						}
 					}
@@ -1265,11 +1277,7 @@ func (s *StateDB) Commit(deleteEmptyObjects bool) (common.Hash, *types.DiffLayer
 			for addr := range s.stateObjectsDirty {
 				if obj := s.stateObjects[addr]; !obj.deleted {
 					// Write any contract code associated with the state object
-					tasks <- func(codeWriter ethdb.KeyValueWriter) {
-						if obj.code != nil && obj.dirtyCode {
-							rawdb.WriteCode(codeWriter, common.BytesToHash(obj.CodeHash()), obj.code)
-							obj.dirtyCode = false
-						}
+					tasks <- func() {
 						// Write any storage changes in the state object to its storage trie
 						if err := obj.CommitTrie(s.db); err != nil {
 							taskResults <- err
@@ -1292,11 +1300,6 @@ func (s *StateDB) Commit(deleteEmptyObjects bool) (common.Hash, *types.DiffLayer
 			if len(s.stateObjectsDirty) > 0 {
 				s.stateObjectsDirty = make(map[common.Address]struct{}, len(s.stateObjectsDirty)/2)
 			}
-			// Write the account trie changes, measuing the amount of wasted time
-			var start time.Time
-			if metrics.EnabledExpensive {
-				start = time.Now()
-			}
 			// The onleaf func is called _serially_, so we can reuse the same account
 			// for unmarshalling every time.
 			var account Account
@@ -1312,13 +1315,47 @@ func (s *StateDB) Commit(deleteEmptyObjects bool) (common.Hash, *types.DiffLayer
 			if err != nil {
 				return err
 			}
-			if metrics.EnabledExpensive {
-				s.AccountCommits += time.Since(start)
-			}
 			if root != emptyRoot {
 				s.db.CacheAccount(root, s.trie)
 			}
 			wg.Wait()
+			return nil
+		}()
+		if commitErr != nil && snapUpdated != nil {
+			// wait for snap commit done
+			<-snapUpdated
+			s.snaps.Remove(s.expectedRoot)
+			//TODO  Rewind the block further
+		}
+		if verified != nil {
+			close(verified)
+		}
+		return commitErr
+	}
+
+	commitFuncs := []func() error{
+		func() error {
+			codeWriter := s.db.TrieDB().DiskDB().NewBatch()
+			for addr := range s.stateObjectsDirty {
+				if obj := s.stateObjects[addr]; !obj.deleted {
+					if obj.code != nil && obj.dirtyCode {
+						rawdb.WriteCode(codeWriter, common.BytesToHash(obj.CodeHash()), obj.code)
+						obj.dirtyCode = false
+						if codeWriter.ValueSize() > ethdb.IdealBatchSize {
+							if err := codeWriter.Write(); err != nil {
+								return err
+							}
+							codeWriter.Reset()
+						}
+					}
+				}
+			}
+			if codeWriter.ValueSize() > 0 {
+				if err := codeWriter.Write(); err != nil {
+					log.Crit("Failed to commit dirty codes", "error", err)
+					return err
+				}
+			}
 			return nil
 		},
 		func() error {
@@ -1327,17 +1364,18 @@ func (s *StateDB) Commit(deleteEmptyObjects bool) (common.Hash, *types.DiffLayer
 				if metrics.EnabledExpensive {
 					defer func(start time.Time) { s.SnapshotCommits += time.Since(start) }(time.Now())
 				}
+				defer close(snapUpdated)
 				// Only update if there's a state transition (skip empty Clique blocks)
-				if parent := s.snap.Root(); parent != root {
-					if err := s.snaps.Update(root, parent, s.snapDestructs, s.snapAccounts, s.snapStorage); err != nil {
-						log.Warn("Failed to update snapshot tree", "from", parent, "to", root, "err", err)
+				if parent := s.snap.Root(); parent != s.expectedRoot {
+					if err := s.snaps.Update(s.expectedRoot, parent, s.snapDestructs, s.snapAccounts, s.snapStorage, verified); err != nil {
+						log.Warn("Failed to update snapshot tree", "from", parent, "to", s.expectedRoot, "err", err)
 					}
 					// Keep n diff layers in the memory
 					// - head layer is paired with HEAD state
 					// - head-1 layer is paired with HEAD-1 state
 					// - head-(n-1) layer(bottom-most diff layer) is paired with HEAD-(n-1)state
-					if err := s.snaps.Cap(root, s.snaps.CapLimit()); err != nil {
-						log.Warn("Failed to cap snapshot tree", "root", root, "layers", s.snaps.CapLimit(), "err", err)
+					if err := s.snaps.Cap(s.expectedRoot, s.snaps.CapLimit()); err != nil {
+						log.Warn("Failed to cap snapshot tree", "root", s.expectedRoot, "layers", s.snaps.CapLimit(), "err", err)
 					}
 				}
 			}
@@ -1349,6 +1387,11 @@ func (s *StateDB) Commit(deleteEmptyObjects bool) (common.Hash, *types.DiffLayer
 			}
 			return nil
 		},
+	}
+	if s.snap != nil {
+		go commmitTrie()
+	} else {
+		commitFuncs = append(commitFuncs, commmitTrie)
 	}
 	commitRes := make(chan error, len(commitFuncs))
 	for _, f := range commitFuncs {
@@ -1364,7 +1407,7 @@ func (s *StateDB) Commit(deleteEmptyObjects bool) (common.Hash, *types.DiffLayer
 		}
 	}
 	s.snap, s.snapDestructs, s.snapAccounts, s.snapStorage = nil, nil, nil, nil
-	return root, diffLayer, nil
+	return s.expectedRoot, diffLayer, nil
 }
 
 func (s *StateDB) DiffLayerToSnap(diffLayer *types.DiffLayer) (map[common.Address]struct{}, map[common.Address][]byte, map[common.Address]map[string][]byte, error) {

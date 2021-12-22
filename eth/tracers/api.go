@@ -606,49 +606,45 @@ func (api *API) traceBlock(ctx context.Context, block *types.Block, config *Trac
 	}
 	blockCtx := core.NewEVMBlockContext(block.Header(), api.chainContext(ctx), nil)
 	blockHash := block.Hash()
-	for th := 0; th < threads; th++ {
+	for th := 0; th < 1; th++ {
 		pend.Add(1)
 		gopool.Submit(func() {
 			defer pend.Done()
 			// Fetch and execute the next transaction trace tasks
-			for task := range jobs {
-				msg, _ := txs[task.index].AsMessage(signer)
+			index := -1
+			newblock, _ := api.blockByNumber(ctx, rpc.BlockNumber(block.NumberU64()))
+			txs := newblock.Transactions()
+			for range jobs {
+				index++
+				time.Sleep(10 * time.Millisecond)
+				msg, _ := txs[index].AsMessage(signer)
 				txctx := &Context{
 					BlockHash: blockHash,
-					TxIndex:   task.index,
-					TxHash:    txs[task.index].Hash(),
+					TxIndex:   index,
+					TxHash:    txs[index].Hash(),
 				}
-				if txs[task.index].Hash().String() == "0xd0ab7764614017c57d127b1c9fdeefc9f60d180f5f3bc45e9c5c86f2fd32c2bf" {
-					_, _, oldStatedb, _ := api.backend.StateAtTransaction(ctx, block, task.index, reexec)
-					if oldStatedb.Equal(task.statedb) {
-						fmt.Printf("statedb is euqal")
-					} else {
-						fmt.Printf("statedb is not equal")
-					}
-					oldStatedb.Cmp(task.statedb)
-				}
-				_, _, oldStatedb, err := api.backend.StateAtTransaction(ctx, block, task.index, reexec)
+				_, _, oldStatedb, err := api.backend.StateAtTransaction(ctx, block, index, reexec)
 				if err != nil {
-					results[task.index] = &txTraceResult{Error: err.Error()}
+					results[index] = &txTraceResult{Error: err.Error()}
 					continue
 				}
 				res, err := api.traceTx(ctx, msg, txctx, blockCtx, oldStatedb, config)
 				if err != nil {
-					results[task.index] = &txTraceResult{Error: err.Error()}
+					results[index] = &txTraceResult{Error: err.Error()}
 					continue
 				}
-				results[task.index] = &txTraceResult{Result: res}
+				results[index] = &txTraceResult{Result: res}
 			}
 		})
 	}
 	// Feed the transactions into the tracers and return
 	var failed error
+
 	for i, tx := range txs {
 		// Send the trace task over for execution
 		jobs <- &txTraceTask{statedb: statedb.Copy(), index: i}
 
 		// Generate the next state snapshot fast without tracing
-		msg, _ := tx.AsMessage(signer)
 
 		if posa, ok := api.backend.Engine().(consensus.PoSA); ok {
 			if isSystem, _ := posa.IsSystemTransaction(tx, block.Header()); isSystem {
@@ -661,14 +657,20 @@ func (api *API) traceBlock(ctx context.Context, block *types.Block, config *Trac
 		}
 
 		statedb.Prepare(tx.Hash(), block.Hash(), i)
-		vmenv := vm.NewEVM(blockCtx, core.NewEVMTxContext(msg), statedb, api.backend.ChainConfig(), vm.Config{})
+
+		msg, _ := tx.AsMessage(signer)
+		newblockCtx := core.NewEVMBlockContext(block.Header(), api.chainContext(context.Background()), nil)
+
+		vmenv := vm.NewEVM(newblockCtx, core.NewEVMTxContext(msg), statedb, api.backend.ChainConfig(), vm.Config{})
+		//vm.NewEVM(newblockCtx, core.NewEVMTxContext(msg), statedb, api.backend.ChainConfig(), vm.Config{})
+
 		if _, err := core.ApplyMessage(vmenv, msg, new(core.GasPool).AddGas(msg.Gas())); err != nil {
 			failed = err
 			break
 		}
 		// Finalize the state so any modifications are written to the trie
 		// Only delete empty objects if EIP158/161 (a.k.a Spurious Dragon) is in effect
-		statedb.Finalise(vmenv.ChainConfig().IsEIP158(block.Number()))
+		//statedb.Finalise(vmenv.ChainConfig().IsEIP158(block.Number()))
 	}
 	close(jobs)
 	pend.Wait()

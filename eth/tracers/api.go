@@ -618,7 +618,21 @@ func (api *API) traceBlock(ctx context.Context, block *types.Block, config *Trac
 					TxIndex:   task.index,
 					TxHash:    txs[task.index].Hash(),
 				}
-				res, err := api.traceTx(ctx, msg, txctx, blockCtx, task.statedb, config)
+				if txs[task.index].Hash().String() == "0xd0ab7764614017c57d127b1c9fdeefc9f60d180f5f3bc45e9c5c86f2fd32c2bf" {
+					_, _, oldStatedb, _ := api.backend.StateAtTransaction(ctx, block, task.index, reexec)
+					if oldStatedb.Equal(task.statedb) {
+						fmt.Printf("statedb is euqal")
+					} else {
+						fmt.Printf("statedb is not equal")
+					}
+					oldStatedb.Cmp(task.statedb)
+				}
+				_, _, oldStatedb, err := api.backend.StateAtTransaction(ctx, block, task.index, reexec)
+				if err != nil {
+					results[task.index] = &txTraceResult{Error: err.Error()}
+					continue
+				}
+				res, err := api.traceTx(ctx, msg, txctx, blockCtx, oldStatedb, config)
 				if err != nil {
 					results[task.index] = &txTraceResult{Error: err.Error()}
 					continue

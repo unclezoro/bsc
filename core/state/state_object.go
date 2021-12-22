@@ -47,6 +47,24 @@ func (s Storage) String() (str string) {
 	return
 }
 
+func (s1 Storage) Equal(s2 Storage) bool {
+	if len(s1) != len(s2) {
+		fmt.Println("len of storage is not equal")
+		return false
+	}
+	for k1, v1 := range s1 {
+		if v2, exist := s2[k1]; !exist || !bytes.Equal(v1.Bytes(), v2.Bytes()){
+			if !exist {
+				fmt.Printf("%s is not exist\n", k1)
+			} else {
+				fmt.Printf("value of %s is not equal\n", k1)
+			}
+			return false
+		}
+	}
+	return true
+}
+
 func (s Storage) Copy() Storage {
 	cpy := make(Storage)
 	for key, value := range s {
@@ -95,6 +113,35 @@ type StateObject struct {
 	encodeData []byte
 }
 
+func (s1 *StateObject) Equal(s2 *StateObject) bool {
+	if !s1.data.Euqal(&s2.data) {
+		fmt.Println("data of stateobject is not equal")
+		return false
+	}
+	if !s1.originStorage.Equal(s2.originStorage) {
+		fmt.Println("originStorage is not euqal")
+		return false
+	}
+	if !s1.pendingStorage.Equal(s2.pendingStorage) {
+		fmt.Println("pendingStorage is not euqal")
+		return false
+	}
+	if !s1.dirtyStorage.Equal(s2.dirtyStorage) {
+		fmt.Println("dirtyStorage is not euqal")
+		return false
+	}
+	if !s1.fakeStorage.Equal(s2.fakeStorage) {
+		fmt.Printf("fakeStorage is not euqal\n")
+		return false
+	}
+	return true
+}
+
+func (s *StateObject)  String() string {
+	return fmt.Sprintf("#address %s\n, addrHash %s\n, data %v\n, originStorage %s\n, pendingStorage %s\n, dirtyStorage %s\n, fakeStorage %s\n, encodeData %v\n",
+		s.address, s.addrHash, s.data, s.originStorage, s.pendingStorage, s.dirtyStorage, s.fakeStorage, s.encodeData)
+}
+
 // empty returns whether the account is considered empty.
 func (s *StateObject) empty() bool {
 	return s.data.Nonce == 0 && s.data.Balance.Sign() == 0 && bytes.Equal(s.data.CodeHash, emptyCodeHash)
@@ -107,6 +154,14 @@ type Account struct {
 	Balance  *big.Int
 	Root     common.Hash // merkle root of the storage trie
 	CodeHash []byte
+}
+
+func(a *Account) Euqal(b *Account) bool {
+	if a.Nonce == b.Nonce && a.Balance.Cmp(b.Balance) == 0 &&
+		bytes.Equal(a.CodeHash, b.CodeHash) && bytes.Equal(a.Root.Bytes(), b.Root.Bytes()) {
+		return true
+	}
+	return false
 }
 
 // newObject creates a state object.

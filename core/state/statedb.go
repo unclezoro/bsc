@@ -169,6 +169,46 @@ func newStateDB(root common.Hash, db Database, snaps *snapshot.Tree) (*StateDB, 
 	return sdb, nil
 }
 
+func (sb1 *StateDB) Equal(sb2 *StateDB) bool {
+	if len(sb1.stateObjects) != len(sb2.stateObjects) {
+		fmt.Println("len of stateObjects is not equal")
+		fmt.Println("addresses of sb1:")
+		for k, _ := range sb1.stateObjects {
+			fmt.Printf("%s\n", k)
+		}
+		fmt.Println("addresses of sb2:")
+		for k, _ := range sb2.stateObjects {
+			fmt.Printf("%s\n", k)
+		}
+		return false
+	}
+	for addr, so1 := range sb1.stateObjects {
+		if so2, exist := sb2.stateObjects[addr]; !exist || !so1.Equal(so2){
+			if !exist {
+				fmt.Printf("addr: %s is not exist\n", addr)
+			} else {
+				fmt.Printf("addr: %s is not in statedb copy\n", addr)
+			}
+			return false
+		}
+	}
+	return true
+}
+
+func (sb1 *StateDB) Cmp(sb2 *StateDB) {
+	for addr, so1 := range sb1.stateObjects {
+		if so2, exist := sb2.stateObjects[addr]; exist {
+			if so1.Equal(so2) {
+				fmt.Printf("addr: %s of state object is equal\n", addr)
+			} else {
+				fmt.Printf("addr: %s of state object is not equal\n", addr)
+			}
+		} else {
+			fmt.Printf("addr: %s is not exist in statedb copy\n", addr)
+		}
+	}
+}
+
 // StartPrefetcher initializes a new trie prefetcher to pull in nodes from the
 // state trie concurrently while the state is mutated so that when we reach the
 // commit phase, most of the needed data is already hot.
@@ -873,6 +913,11 @@ func (s *StateDB) Copy() *StateDB {
 		}
 	}
 	return state
+}
+
+func (s *StateDB) String() string {
+	return fmt.Sprintf("dirty states: %v\n, state object pending %v\n, state object dirty: %v\n, state object:%s\n",
+		s.journal.dirties, s.stateObjectsPending, s.stateObjectsDirty, s.stateObjects)
 }
 
 // Snapshot returns an identifier for the current revision of the state.

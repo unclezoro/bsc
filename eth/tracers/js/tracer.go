@@ -762,6 +762,8 @@ func (jst *jsTracer) CaptureFault(pc uint64, op vm.OpCode, gas, cost uint64, sco
 
 // CaptureEnd is called after the call finishes to finalize the tracing.
 func (jst *jsTracer) CaptureEnd(output []byte, gasUsed uint64, t time.Duration, err error) {
+	fmt.Printf("Js gas used: %d\n", gasUsed)
+
 	jst.ctx["output"] = output
 	jst.ctx["time"] = t.String()
 	jst.ctx["gasUsed"] = gasUsed

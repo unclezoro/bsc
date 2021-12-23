@@ -500,10 +500,6 @@ func (api *API) traceBlock(ctx context.Context, block *types.Block, config *Trac
 	if config != nil && config.Reexec != nil {
 		reexec = *config.Reexec
 	}
-	statedb, err := api.backend.StateAtBlock(ctx, parent, reexec, nil, true)
-	if err != nil {
-		return nil, err
-	}
 	// Execute all the transaction contained within the block concurrently
 	var (
 		signer  = types.MakeSigner(api.backend.ChainConfig(), block.Number())
@@ -519,6 +515,7 @@ func (api *API) traceBlock(ctx context.Context, block *types.Block, config *Trac
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
+			statedb, _ := api.backend.StateAtBlock(ctx, parent, reexec, nil, true)
 			for i, tx := range txs {
 				// Generate the next state snapshot fast without tracing
 				msg, _ := tx.AsMessage(signer)

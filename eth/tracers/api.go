@@ -526,17 +526,25 @@ func (api *API) traceBlock(ctx context.Context, block *types.Block, config *Trac
 			// Fetch and execute the next transaction trace tasks
 			for task := range jobs {
 				msg, _ := txs[task.index].AsMessage(signer)
-				txctx := &txTraceContext{
-					index: task.index,
-					hash:  txs[task.index].Hash(),
-					block: blockHash,
+				//txctx := &Context{
+				//	BlockHash: blockHash,
+				//	TxIndex:   task.index,
+				//	TxHash:    txs[task.index].Hash(),
+				//}
+				//res, err := api.traceTx(ctx, msg, txctx, blockCtx, task.statedb, config)
+				_, _, newstatedb, _ := api.backend.StateAtTransaction(context.Background(), block, task.index, reexec)
+				vmenv := vm.NewEVM(blockCtx, core.NewEVMTxContext(msg), newstatedb, api.backend.ChainConfig(), vm.Config{})
+
+				if _, err := core.ApplyMessage(vmenv, msg, new(core.GasPool).AddGas(msg.Gas())); err != nil {
+					fmt.Printf("apply err %v \n", err)
+					break
 				}
-				res, err := api.traceTx(ctx, msg, txctx, blockCtx, task.statedb, config)
+
 				if err != nil {
 					results[task.index] = &txTraceResult{Error: err.Error()}
 					continue
 				}
-				results[task.index] = &txTraceResult{Result: res}
+				results[task.index] = &txTraceResult{Result: "testres"}
 			}
 		})
 	}

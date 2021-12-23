@@ -25,6 +25,8 @@ import (
 	"sync/atomic"
 	"time"
 
+	"golang.org/x/tools/go/ssa/interp/testdata/src/fmt"
+
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/core/vm"
 	"github.com/ethereum/go-ethereum/eth/tracers"
@@ -82,6 +84,7 @@ func (t *callTracer) CaptureStart(env *vm.EVM, from common.Address, to common.Ad
 // CaptureEnd is called after the call finishes to finalize the tracing.
 func (t *callTracer) CaptureEnd(output []byte, gasUsed uint64, _ time.Duration, err error) {
 	t.callstack[0].GasUsed = uintToHex(gasUsed)
+	fmt.Printf("native gas used: %d", gasUsed)
 	if err != nil {
 		t.callstack[0].Error = err.Error()
 		if err.Error() == "execution reverted" && len(output) > 0 {

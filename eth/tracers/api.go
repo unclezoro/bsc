@@ -520,8 +520,9 @@ func (api *API) traceBlock(ctx context.Context, block *types.Block, config *Trac
 		go func(index int) {
 			defer wg.Done()
 			statedb, _ := api.backend.StateAtBlock(ctx, parent, reexec, nil, true)
-			<-start[index]
 			for i, tx := range txs {
+				<-start[i]
+
 				// Generate the next state snapshot fast without tracing
 				msg, _ := tx.AsMessage(signer)
 

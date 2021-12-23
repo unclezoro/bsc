@@ -605,7 +605,7 @@ func (api *API) traceBlock(ctx context.Context, block *types.Block, config *Trac
 		threads = len(txs)
 	}
 	blockCtx := core.NewEVMBlockContext(block.Header(), api.chainContext(ctx), nil)
-	blockHash := block.Hash()
+	//blockHash := block.Hash()
 	for th := 0; th < threads; th++ {
 		pend.Add(1)
 		gopool.Submit(func() {
@@ -613,17 +613,25 @@ func (api *API) traceBlock(ctx context.Context, block *types.Block, config *Trac
 			// Fetch and execute the next transaction trace tasks
 			for task := range jobs {
 				msg, _ := txs[task.index].AsMessage(signer)
-				txctx := &Context{
-					BlockHash: blockHash,
-					TxIndex:   task.index,
-					TxHash:    txs[task.index].Hash(),
+				//txctx := &Context{
+				//	BlockHash: blockHash,
+				//	TxIndex:   task.index,
+				//	TxHash:    txs[task.index].Hash(),
+				//}
+				//res, err := api.traceTx(ctx, msg, txctx, blockCtx, task.statedb, config)
+				_, _, newstatedb, _ := api.backend.StateAtTransaction(context.Background(), block, task.index, reexec)
+				vmenv := vm.NewEVM(blockCtx, core.NewEVMTxContext(msg), newstatedb, api.backend.ChainConfig(), vm.Config{})
+
+				if _, err := core.ApplyMessage(vmenv, msg, new(core.GasPool).AddGas(msg.Gas())); err != nil {
+					fmt.Printf("apply err %v \n", err)
+					break
 				}
-				res, err := api.traceTx(ctx, msg, txctx, blockCtx, task.statedb, config)
+
 				if err != nil {
 					results[task.index] = &txTraceResult{Error: err.Error()}
 					continue
 				}
-				results[task.index] = &txTraceResult{Result: res}
+				results[task.index] = &txTraceResult{Result: "testres"}
 			}
 		})
 	}
@@ -648,7 +656,7 @@ func (api *API) traceBlock(ctx context.Context, block *types.Block, config *Trac
 
 		statedb.Prepare(tx.Hash(), block.Hash(), i)
 		vmenv := vm.NewEVM(blockCtx, core.NewEVMTxContext(msg), statedb, api.backend.ChainConfig(), vm.Config{})
-		time.Sleep(20 * time.Millisecond)
+		//time.Sleep(20 * time.Millisecond)
 
 		if _, err := core.ApplyMessage(vmenv, msg, new(core.GasPool).AddGas(msg.Gas())); err != nil {
 			failed = err

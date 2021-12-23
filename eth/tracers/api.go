@@ -513,53 +513,45 @@ func (api *API) traceBlock(ctx context.Context, block *types.Block, config *Trac
 		pend = new(sync.WaitGroup)
 		jobs = make(chan *txTraceTask, len(txs))
 	)
-	threads := runtime.NumCPU()
-	if threads > len(txs) {
-		threads = len(txs)
-	}
+	var failed error
+
 	blockCtx := core.NewEVMBlockContext(block.Header(), api.chainContext(ctx), nil)
-	for th := 0; th < threads; th++ {
+	for th := 0; th < 1; th++ {
 		pend.Add(1)
 		gopool.Submit(func() {
 			defer pend.Done()
-			// Fetch and execute the next transaction trace tasks
-			for task := range jobs {
-				msg, _ := txs[task.index].AsMessage(signer)
-				//txctx := &Context{
-				//	BlockHash: blockHash,
-				//	TxIndex:   task.index,
-				//	TxHash:    txs[task.index].Hash(),
-				//}
-				//res, err := api.traceTx(ctx, msg, txctx, blockCtx, task.statedb, config)
-				_, _, newstatedb, _ := api.backend.StateAtTransaction(context.Background(), block, task.index, reexec)
+			statedb, _ := api.backend.StateAtBlock(ctx, parent, reexec, nil, true)
+			i := -1
+			for range jobs {
+				i++
+				// Generate the next state snapshot fast without tracing
+				msg, _ := txs[i].AsMessage(signer)
 
 				if posa, ok := api.backend.Engine().(consensus.PoSA); ok {
-					if isSystem, _ := posa.IsSystemTransaction(txs[task.index], block.Header()); isSystem {
-						balance := newstatedb.GetBalance(consensus.SystemAddress)
+					if isSystem, _ := posa.IsSystemTransaction(txs[i], block.Header()); isSystem {
+						balance := statedb.GetBalance(consensus.SystemAddress)
 						if balance.Cmp(common.Big0) > 0 {
-							newstatedb.SetBalance(consensus.SystemAddress, big.NewInt(0))
-							newstatedb.AddBalance(block.Header().Coinbase, balance)
+							statedb.SetBalance(consensus.SystemAddress, big.NewInt(0))
+							statedb.AddBalance(block.Header().Coinbase, balance)
 						}
 					}
 				}
+				blockCtx := core.NewEVMBlockContext(block.Header(), api.chainContext(ctx), nil)
 
-				vmenv := vm.NewEVM(blockCtx, core.NewEVMTxContext(msg), newstatedb, api.backend.ChainConfig(), vm.Config{})
-
+				statedb.Prepare(txs[i].Hash(), block.Hash(), i)
+				vmenv := vm.NewEVM(blockCtx, core.NewEVMTxContext(msg), statedb, api.backend.ChainConfig(), vm.Config{})
 				if _, err := core.ApplyMessage(vmenv, msg, new(core.GasPool).AddGas(msg.Gas())); err != nil {
-					fmt.Printf("apply err %v \n", err)
+					failed = err
 					break
 				}
+				// Finalize the state so any modifications are written to the trie
+				// Only delete empty objects if EIP158/161 (a.k.a Spurious Dragon) is in effect
+				statedb.Finalise(vmenv.ChainConfig().IsEIP158(block.Number()))
 
-				if err != nil {
-					results[task.index] = &txTraceResult{Error: err.Error()}
-					continue
-				}
-				results[task.index] = &txTraceResult{Result: "testres"}
 			}
 		})
 	}
 	// Feed the transactions into the tracers and return
-	var failed error
 	for i, tx := range txs {
 		// Send the trace task over for execution
 		jobs <- &txTraceTask{statedb: statedb.Copy(), index: i}

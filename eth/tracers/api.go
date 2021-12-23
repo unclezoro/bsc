@@ -536,7 +536,7 @@ func (api *API) traceBlock(ctx context.Context, block *types.Block, config *Trac
 						}
 					}
 				}
-				blockCtx := core.NewEVMBlockContext(block.Header(), api.chainContext(ctx), nil)
+				//blockCtx := core.NewEVMBlockContext(block.Header(), api.chainContext(ctx), nil)
 
 				statedb.Prepare(txs[i].Hash(), block.Hash(), i)
 				vmenv := vm.NewEVM(blockCtx, core.NewEVMTxContext(msg), statedb, api.backend.ChainConfig(), vm.Config{})

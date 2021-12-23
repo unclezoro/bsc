@@ -511,11 +511,13 @@ func (api *API) traceBlock(ctx context.Context, block *types.Block, config *Trac
 	var failed error
 	var wg sync.WaitGroup
 	var failLock sync.Mutex
+	start := make(chan struct{})
 	for i := 0; i < 20; i++ {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
 			statedb, _ := api.backend.StateAtBlock(ctx, parent, reexec, nil, true)
+			<-start
 			for i, tx := range txs {
 				// Generate the next state snapshot fast without tracing
 				msg, _ := tx.AsMessage(signer)
@@ -545,6 +547,7 @@ func (api *API) traceBlock(ctx context.Context, block *types.Block, config *Trac
 			}
 		}()
 	}
+	close(start)
 	wg.Wait()
 
 	// If execution failed in between, abort

@@ -610,7 +610,6 @@ func (api *API) traceBlock(ctx context.Context, block *types.Block, config *Trac
 		pend.Add(1)
 		gopool.Submit(func() {
 			defer pend.Done()
-			time.Sleep(10 * time.Millisecond)
 			// Fetch and execute the next transaction trace tasks
 			for task := range jobs {
 				msg, _ := txs[task.index].AsMessage(signer)
@@ -649,6 +648,8 @@ func (api *API) traceBlock(ctx context.Context, block *types.Block, config *Trac
 
 		statedb.Prepare(tx.Hash(), block.Hash(), i)
 		vmenv := vm.NewEVM(blockCtx, core.NewEVMTxContext(msg), statedb, api.backend.ChainConfig(), vm.Config{})
+		time.Sleep(20 * time.Millisecond)
+
 		if _, err := core.ApplyMessage(vmenv, msg, new(core.GasPool).AddGas(msg.Gas())); err != nil {
 			failed = err
 			break

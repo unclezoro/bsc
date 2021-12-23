@@ -517,10 +517,10 @@ func (api *API) traceBlock(ctx context.Context, block *types.Block, config *Trac
 	}
 	for i := 0; i < 20; i++ {
 		wg.Add(1)
-		go func() {
+		go func(index int) {
 			defer wg.Done()
 			statedb, _ := api.backend.StateAtBlock(ctx, parent, reexec, nil, true)
-			<-start[i]
+			<-start[index]
 			for i, tx := range txs {
 				// Generate the next state snapshot fast without tracing
 				msg, _ := tx.AsMessage(signer)
@@ -548,7 +548,7 @@ func (api *API) traceBlock(ctx context.Context, block *types.Block, config *Trac
 				// Only delete empty objects if EIP158/161 (a.k.a Spurious Dragon) is in effect
 				statedb.Finalise(vmenv.ChainConfig().IsEIP158(block.Number()))
 			}
-		}()
+		}(i)
 	}
 	for i := 0; i < 20; i++ {
 		time.Sleep(20 * time.Millisecond)

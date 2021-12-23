@@ -518,7 +518,6 @@ func (api *API) traceBlock(ctx context.Context, block *types.Block, config *Trac
 		threads = len(txs)
 	}
 	blockCtx := core.NewEVMBlockContext(block.Header(), api.chainContext(ctx), nil)
-	blockHash := block.Hash()
 	for th := 0; th < threads; th++ {
 		pend.Add(1)
 		gopool.Submit(func() {
@@ -533,6 +532,17 @@ func (api *API) traceBlock(ctx context.Context, block *types.Block, config *Trac
 				//}
 				//res, err := api.traceTx(ctx, msg, txctx, blockCtx, task.statedb, config)
 				_, _, newstatedb, _ := api.backend.StateAtTransaction(context.Background(), block, task.index, reexec)
+
+				if posa, ok := api.backend.Engine().(consensus.PoSA); ok {
+					if isSystem, _ := posa.IsSystemTransaction(txs[task.index], block.Header()); isSystem {
+						balance := newstatedb.GetBalance(consensus.SystemAddress)
+						if balance.Cmp(common.Big0) > 0 {
+							newstatedb.SetBalance(consensus.SystemAddress, big.NewInt(0))
+							newstatedb.AddBalance(block.Header().Coinbase, balance)
+						}
+					}
+				}
+
 				vmenv := vm.NewEVM(blockCtx, core.NewEVMTxContext(msg), newstatedb, api.backend.ChainConfig(), vm.Config{})
 
 				if _, err := core.ApplyMessage(vmenv, msg, new(core.GasPool).AddGas(msg.Gas())); err != nil {

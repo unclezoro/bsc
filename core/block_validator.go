@@ -144,6 +144,11 @@ func (v *BlockValidator) ValidateState(block *types.Block, statedb *state.StateD
 				return nil
 			}
 		})
+	} else {
+		validateFuns = append(validateFuns, func() error {
+			statedb.Finalise(v.config.IsEIP158(header.Number))
+			return statedb.AccountsIntermediateRoot()
+		})
 	}
 	validateRes := make(chan error, len(validateFuns))
 	for _, f := range validateFuns {

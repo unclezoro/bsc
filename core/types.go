@@ -40,6 +40,9 @@ type Prefetcher interface {
 	// the transaction messages using the statedb, but any changes are discarded. The
 	// only goal is to pre-cache transaction signatures and state trie nodes.
 	Prefetch(block *types.Block, statedb *state.StateDB, cfg vm.Config, interrupt *uint32)
+
+	MinerPrefetch(header *types.Header, txs *types.TransactionsByPriceAndNonce,
+		statedb *state.StateDB, cfg vm.Config, exit chan struct{})
 }
 
 // Processor is an interface for processing blocks using a given initial state.

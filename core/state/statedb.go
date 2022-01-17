@@ -1260,7 +1260,7 @@ func (s *StateDB) LightCommit() (common.Hash, *types.DiffLayer, error) {
 }
 
 // Commit writes the state to the underlying in-memory trie database.
-func (s *StateDB) Commit(deleteEmptyObjects bool, failPostCommitFunc func(), postCommitFuncs ...func() error) (common.Hash, *types.DiffLayer, error) {
+func (s *StateDB) Commit(failPostCommitFunc func(), postCommitFuncs ...func() error) (common.Hash, *types.DiffLayer, error) {
 	if s.dbErr != nil {
 		return common.Hash{}, nil, fmt.Errorf("commit aborted due to earlier error: %v", s.dbErr)
 	}
@@ -1288,13 +1288,6 @@ func (s *StateDB) Commit(deleteEmptyObjects bool, failPostCommitFunc func(), pos
 		// async commit the MPT
 		verified = make(chan struct{})
 		snapUpdated = make(chan struct{})
-	}
-
-	s.Finalise(deleteEmptyObjects)
-	err := s.AccountsIntermediateRoot()
-
-	if err != nil {
-		return common.Hash{}, nil, err
 	}
 
 	commmitTrie := func() error {
@@ -1448,9 +1441,11 @@ func (s *StateDB) Commit(deleteEmptyObjects bool, failPostCommitFunc func(), pos
 					// - head layer is paired with HEAD state
 					// - head-1 layer is paired with HEAD-1 state
 					// - head-(n-1) layer(bottom-most diff layer) is paired with HEAD-(n-1)state
-					if err := s.snaps.Cap(s.expectedRoot, s.snaps.CapLimit()); err != nil {
-						log.Warn("Failed to cap snapshot tree", "root", s.expectedRoot, "layers", s.snaps.CapLimit(), "err", err)
-					}
+					go func() {
+						if err := s.snaps.Cap(s.expectedRoot, s.snaps.CapLimit()); err != nil {
+							log.Warn("Failed to cap snapshot tree", "root", s.expectedRoot, "layers", s.snaps.CapLimit(), "err", err)
+						}
+					}()
 				}
 			}
 			return nil

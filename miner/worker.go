@@ -983,16 +983,9 @@ func (w *worker) commitNewWork(interrupt *int32, noempty bool, timestamp int64) 
 		}
 		if len(remoteTxs) > 0 {
 			txs := types.NewTransactionsByPriceAndNonce(w.current.signer, remoteTxs)
-			exitCh := make(chan struct{})
-			go func(txs *types.TransactionsByPriceAndNonce,
-				statedb *state.StateDB) {
-				w.fetcher.MinerPrefetch(header, txs, statedb, *w.chain.GetVMConfig(), exitCh)
-			}(txs.Copy(), w.current.state.Copy())
 			if w.commitTransactions(txs, w.coinbase, interrupt) {
-				close(exitCh)
 				return
 			}
-			close(exitCh)
 		}
 		commitTxsTimer.UpdateSince(start)
 		log.Info("Gas pool", "height", header.Number.String(), "pool", w.current.gasPool.String())

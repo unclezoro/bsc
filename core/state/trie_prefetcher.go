@@ -127,7 +127,9 @@ func (p *triePrefetcher) close() {
 			}
 		}
 	}
-	close(p.closeChan)
+	if p.closeChan != nil {
+		close(p.closeChan)
+	}
 	// Clear out all fetchers (will crash on a second call, deliberate)
 	p.fetchers = nil
 }

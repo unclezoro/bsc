@@ -84,6 +84,11 @@ func (p *statePrefetcher) Prefetch(block *types.Block, statedb *state.StateDB, c
 				newStatedb.Prepare(tx.Hash(), header.Hash(), i)
 				precacheTransaction(msg, p.config, gaspool, newStatedb, header, evm)
 			}
+			err := newStatedb.WaitPipeVerification()
+			if err != nil {
+				return
+			}
+			newStatedb.IntermediateRoot(p.config.IsEIP158(header.Number))
 		}(i)
 	}
 }

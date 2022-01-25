@@ -56,6 +56,14 @@ type Config struct {
 	IsFlashbots       bool  `toml:",omitempty"`
 	MaxSimulatBundles int   `toml:",omitempty"`
 	MevGasPriceFloor  int64 `toml:",omitempty"`
+	MevGasNativeScale int64 `toml:",omitempty"` // The weight value when calculating the BundlePrice. If the setting is higher, the proportion of the user's self-transfer will be higher. Default is 2
+}
+
+func (conf *Config) sanitize() {
+	if conf.MevGasNativeScale < 1 {
+		log.Warn("Sanitizing invalid miner mev gas native scale", "provided", conf.MevGasNativeScale, "updated", 2)
+		conf.MevGasNativeScale = 2
+	}
 }
 
 // Miner creates blocks and searches for proof-of-work values.
@@ -71,6 +79,7 @@ type Miner struct {
 }
 
 func New(eth Backend, config *Config, chainConfig *params.ChainConfig, mux *event.TypeMux, engine consensus.Engine, isLocalBlock func(block *types.Block) bool) *Miner {
+	config.sanitize()
 	miner := &Miner{
 		eth:     eth,
 		mux:     mux,
@@ -231,7 +240,7 @@ func (miner *Miner) SimulateBundle(bundle types.MevBundle) (*big.Int, error) {
 		return nil, err
 	}
 
-	s, err := miner.worker.computeBundleGas(bundle, parent, header, state, gasPool, 0, false, false)
+	s, err := miner.worker.computeBundleGas(bundle, header, state, gasPool, 0, false, false)
 	if err != nil {
 		return nil, err
 	}

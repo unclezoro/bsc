@@ -426,6 +426,48 @@ type TransactionsByPriceAndNonce struct {
 	signer Signer                          // Signer for the set of transactions
 }
 
+// NewTransactionsByPriceAndNonceAndBundlePrice creates two transaction sets that can retrieve
+// price sorted transactions in a nonce-honouring way.
+// The first result is a transaction set that is bigger than the bundle price.
+// The second result is a transaction set that is lower or equal to the bundle price.
+// Note, the input map is reowned so the caller should not interact any more with
+// if after providing it to the constructor.
+func NewTransactionsByPriceAndNonceAndBundlePrice(max, min *big.Int, signer Signer, txs map[common.Address]Transactions) (*TransactionsByPriceAndNonce, *TransactionsByPriceAndNonce) {
+	// Initialize a price and received time based heap with the head transactions
+	gtMaxBundleGasPriceHeads := make(TxByPriceAndTime, 0, len(txs))
+	gtMaxBundleGasPriceTxs := make(map[common.Address]Transactions, len(txs))
+	lesMinBundleGasPriceHeads := make(TxByPriceAndTime, 0, len(txs))
+	lesMinBundleGasPriceTxs := make(map[common.Address]Transactions, len(txs))
+	for from, accTxs := range txs {
+		tx := accTxs[0]
+		// Ensure the sender address is from the signer
+		if acc, _ := Sender(signer, tx); acc != from {
+			delete(txs, from)
+			continue
+		}
+		if tx.GasPrice().Cmp(max) > 0 {
+			gtMaxBundleGasPriceHeads = append(gtMaxBundleGasPriceHeads, tx)
+			gtMaxBundleGasPriceTxs[from] = accTxs[1:]
+		} else if tx.GasPrice().Cmp(min) <= 0 {
+			lesMinBundleGasPriceHeads = append(lesMinBundleGasPriceHeads, tx)
+			lesMinBundleGasPriceTxs[from] = accTxs[1:]
+		}
+	}
+	heap.Init(&gtMaxBundleGasPriceHeads)
+	heap.Init(&lesMinBundleGasPriceHeads)
+
+	// Assemble and return the transaction set
+	return &TransactionsByPriceAndNonce{
+			txs:    gtMaxBundleGasPriceTxs,
+			heads:  gtMaxBundleGasPriceHeads,
+			signer: signer,
+		}, &TransactionsByPriceAndNonce{
+			txs:    lesMinBundleGasPriceTxs,
+			heads:  lesMinBundleGasPriceHeads,
+			signer: signer,
+		}
+}
+
 // NewTransactionsByPriceAndNonce creates a transaction set that can retrieve
 // price sorted transactions in a nonce-honouring way.
 //

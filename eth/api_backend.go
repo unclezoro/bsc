@@ -244,22 +244,33 @@ func (b *EthAPIBackend) GetPoolTransactions() (types.Transactions, error) {
 }
 
 func (b *EthAPIBackend) SendBundle(ctx context.Context, txs types.Transactions, maxBlockNumber rpc.BlockNumber, minTimestamp uint64, maxTimestamp uint64, revertingTxHashes []common.Hash) (common.Hash, error) {
-	return b.eth.txPool.AddMevBundle(txs, big.NewInt(maxBlockNumber.Int64()), minTimestamp, maxTimestamp, revertingTxHashes)
+	return b.eth.txPool.AddMevBundle(txs, big.NewInt(maxBlockNumber.Int64()), minTimestamp, maxTimestamp, revertingTxHashes, big.NewInt(b.eth.config.Miner.MevGasPriceFloor))
 }
 
-func (b *EthAPIBackend) BundlePrice() (*big.Int, error) {
+func (b *EthAPIBackend) MinimalBundleGasPrice() *big.Int {
+	// MinimalGasPrice =  P(N)(gasPriceOf( top5TxOf(recent50Blocks) ))
+	gasfloor := big.NewInt(b.eth.config.Miner.MevGasPriceFloor)
+	gasPrice := b.eth.TxPool().LatestBundleGasPrice()
+	if gasPrice.Cmp(gasfloor) < 0 {
+		return gasfloor
+	}
+	return gasPrice
+}
+
+func (b *EthAPIBackend) BundlePrice() *big.Int {
 	bundles := b.eth.txPool.AllMevBundles()
 	if len(bundles) < b.eth.config.Miner.MaxSimulatBundles/2 {
-		return big.NewInt(b.eth.config.Miner.MevGasPriceFloor), nil
+		return big.NewInt(b.eth.config.Miner.MevGasPriceFloor)
 	}
 	sort.SliceStable(bundles, func(i, j int) bool {
 		return bundles[j].Price.Cmp(bundles[i].Price) < 0
 	})
+	gasfloor := big.NewInt(b.eth.config.Miner.MevGasPriceFloor)
 	idx := len(bundles) / 2
-	if bundles[idx].Price.Cmp(big.NewInt(b.eth.config.Miner.MevGasPriceFloor)) < 0 {
-		return big.NewInt(b.eth.config.Miner.MevGasPriceFloor), nil
+	if bundles[idx].Price.Cmp(gasfloor) < 0 {
+		return gasfloor
 	}
-	return bundles[idx].Price, nil
+	return bundles[idx].Price
 }
 
 func (b *EthAPIBackend) GetPoolTransaction(hash common.Hash) *types.Transaction {

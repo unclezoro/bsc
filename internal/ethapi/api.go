@@ -2515,8 +2515,14 @@ type SendBundleArgs struct {
 	RevertingTxHashes []common.Hash   `json:"revertingTxHashes"`
 }
 
-func (s *PrivateTxBundleAPI) BundlePrice(ctx context.Context) (*big.Int, error) {
-	return s.b.BundlePrice()
+// BundlePrice is the response for the API `eth_bundlePrice`
+type BundlePrice struct {
+	BundlePrice     *big.Int `json:"bundlePrice"`
+	MinimalGasPrice *big.Int `json:"minimalGasPrice"`
+}
+
+func (s *PrivateTxBundleAPI) BundlePrice(ctx context.Context) (*BundlePrice, error) {
+	return &BundlePrice{BundlePrice: s.b.BundlePrice(), MinimalGasPrice: s.b.MinimalBundleGasPrice()}, nil
 }
 
 // SendBundle will add the signed transaction to the transaction pool.
@@ -2534,6 +2540,9 @@ func (s *PrivateTxBundleAPI) SendBundle(ctx context.Context, args SendBundleArgs
 	currentBlock := s.b.CurrentBlock()
 	if args.MaxBlockNumber != 0 && args.MaxBlockNumber.Int64() > int64(currentBlock.NumberU64())+MaxBundleBlockDelay {
 		return common.Hash{}, core.NewCustomError("the maxBlockNumber should not be lager than currentBlockNum + 100", InvalidBundleParamError)
+	}
+	if args.MaxTimestamp != nil && *args.MaxTimestamp != 0 && *args.MaxTimestamp < currentBlock.Time() {
+		return common.Hash{}, core.NewCustomError("the maxTimestamp should not be less than currentBlockTimestamp", InvalidBundleParamError)
 	}
 	if args.MaxTimestamp != nil && *args.MaxTimestamp > currentBlock.Time()+uint64(MaxBundleTimeDelay) {
 		return common.Hash{}, core.NewCustomError("the maxTimestamp should not be later than currentBlockTimestamp + 5 minutes", InvalidBundleParamError)

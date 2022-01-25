@@ -92,10 +92,11 @@ var (
 	// making the transaction invalid, rather a DOS protection.
 	ErrOversizedData = errors.New("oversized data")
 
-	BundleAlreadyExistError = NewCustomError("bundle already exist", -38001)
-	BundlePoolFullError     = NewCustomError("bundle pool is full", -38002)
-	SimulatorMissingError   = NewCustomError("bundle simulator is missing", -38003)
-	DifferentSendersError   = NewCustomError("only one tx sender is allowed within one bundle", -38010)
+	BundleAlreadyExistError     = NewCustomError("bundle already exist", -38001)
+	BundlePoolFullError         = NewCustomError("bundle pool is full", -38002)
+	SimulatorMissingError       = NewCustomError("bundle simulator is missing", -38003)
+	DifferentSendersError       = NewCustomError("only one tx sender is allowed within one bundle", -38010)
+	BundleGasPriceMismatchError = NewCustomError("gas price in the bundle should be same", -38012)
 )
 
 var (
@@ -147,6 +148,7 @@ const (
 type blockChain interface {
 	CurrentBlock() *types.Block
 	GetBlock(hash common.Hash, number uint64) *types.Block
+	GetBlockByHash(hash common.Hash) *types.Block
 	StateAt(root common.Hash) (*state.StateDB, error)
 
 	SubscribeChainHeadEvent(ch chan<- ChainHeadEvent) event.Subscription
@@ -166,12 +168,17 @@ type TxPoolConfig struct {
 	PriceLimit uint64 // Minimum gas price to enforce for acceptance into the pool
 	PriceBump  uint64 // Minimum price bump percentage to replace an already existing transaction (nonce)
 
-	AccountSlots uint64        // Number of executable transaction slots guaranteed per account
-	GlobalSlots  uint64        // Maximum number of executable transaction slots for all accounts
-	AccountQueue uint64        // Maximum number of non-executable transaction slots permitted per account
-	GlobalQueue  uint64        // Maximum number of non-executable transaction slots for all accounts
-	BundleSlot   uint64        // Maximum number of bundle slots for all accounts
-	Lifetime     time.Duration // Maximum amount of time non-executable transaction are queued
+	AccountSlots                  uint64        // Number of executable transaction slots guaranteed per account
+	GlobalSlots                   uint64        // Maximum number of executable transaction slots for all accounts
+	AccountQueue                  uint64        // Maximum number of non-executable transaction slots permitted per account
+	GlobalQueue                   uint64        // Maximum number of non-executable transaction slots for all accounts
+	BundleSlot                    uint64        // Maximum number of bundle slots for all accounts
+	MaxBundleBlocks               uint64        // Maximum number of blocks for calculating MinimalBundleGasPrice
+	BundleTxSampleNum             uint64        // Sample number of block transactions for calculating MinimalBundleGasPrice
+	MevGasPricePercentile         uint8         // Percentile of the recent minimal mev gas price
+	MevGasPricePoolExpireTime     time.Duration // Store time duration amount of recent mev gas price
+	UpdateMevGasPricePoolInterval time.Duration // Time interval to update MevGasPricePool
+	Lifetime                      time.Duration // Maximum amount of time non-executable transaction are queued
 }
 
 // DefaultTxPoolConfig contains the default configurations for the transaction
@@ -189,6 +196,12 @@ var DefaultTxPoolConfig = TxPoolConfig{
 	GlobalQueue:  1024,
 
 	Lifetime: 3 * time.Hour,
+
+	MaxBundleBlocks:               50,
+	BundleTxSampleNum:             5,
+	MevGasPricePercentile:         90,
+	MevGasPricePoolExpireTime:     time.Minute,
+	UpdateMevGasPricePoolInterval: time.Second,
 }
 
 // sanitize checks the provided user configurations and changes anything that's
@@ -227,6 +240,26 @@ func (config *TxPoolConfig) sanitize() TxPoolConfig {
 		log.Warn("Sanitizing invalid txpool lifetime", "provided", conf.Lifetime, "updated", DefaultTxPoolConfig.Lifetime)
 		conf.Lifetime = DefaultTxPoolConfig.Lifetime
 	}
+	if conf.MaxBundleBlocks < 1 {
+		log.Warn("Sanitizing invalid txpool max bundle blocks", "provided", conf.MaxBundleBlocks, "updated", DefaultTxPoolConfig.MaxBundleBlocks)
+		conf.MaxBundleBlocks = DefaultTxPoolConfig.MaxBundleBlocks
+	}
+	if conf.BundleTxSampleNum < 1 {
+		log.Warn("Sanitizing invalid txpool bundle tx sample num", "provided", conf.BundleTxSampleNum, "updated", DefaultTxPoolConfig.BundleTxSampleNum)
+		conf.BundleTxSampleNum = DefaultTxPoolConfig.BundleTxSampleNum
+	}
+	if conf.MevGasPricePercentile >= 100 {
+		log.Warn("Sanitizing invalid txpool mev gas price percentile", "provided", conf.MevGasPricePercentile, "updated", DefaultTxPoolConfig.MevGasPricePercentile)
+		conf.MevGasPricePercentile = DefaultTxPoolConfig.MevGasPricePercentile
+	}
+	if conf.MevGasPricePoolExpireTime < 1 {
+		log.Warn("Sanitizing invalid txpool mev gas price pool expire time", "provided", conf.MevGasPricePoolExpireTime, "updated", DefaultTxPoolConfig.MevGasPricePoolExpireTime)
+		conf.MevGasPricePoolExpireTime = DefaultTxPoolConfig.MevGasPricePoolExpireTime
+	}
+	if conf.UpdateMevGasPricePoolInterval < time.Second {
+		log.Warn("Sanitizing invalid txpool update MevGasPricePool interval", "provided", conf.UpdateMevGasPricePoolInterval, "updated", DefaultTxPoolConfig.UpdateMevGasPricePoolInterval)
+		conf.UpdateMevGasPricePoolInterval = DefaultTxPoolConfig.UpdateMevGasPricePoolInterval
+	}
 	return conf
 }
 
@@ -258,12 +291,13 @@ type TxPool struct {
 	locals  *accountSet // Set of local transaction to exempt from eviction rules
 	journal *txJournal  // Journal of local transaction to back up to disk
 
-	pending    map[common.Address]*txList   // All currently processable transactions
-	queue      map[common.Address]*txList   // Queued but non-processable transactions
-	beats      map[common.Address]time.Time // Last heartbeat from each known account
-	mevBundles map[common.Hash]*types.MevBundle
-	all        *txLookup     // All transactions to allow lookups
-	priced     *txPricedList // All transactions sorted by price
+	pending         map[common.Address]*txList   // All currently processable transactions
+	queue           map[common.Address]*txList   // Queued but non-processable transactions
+	beats           map[common.Address]time.Time // Last heartbeat from each known account
+	mevBundles      map[common.Hash]*types.MevBundle
+	mevGasPricePool *MevGasPricePool
+	all             *txLookup     // All transactions to allow lookups
+	priced          *txPricedList // All transactions sorted by price
 
 	chainHeadCh     chan ChainHeadEvent
 	chainHeadSub    event.Subscription
@@ -284,7 +318,6 @@ type txpoolResetRequest struct {
 func NewTxPool(config TxPoolConfig, chainconfig *params.ChainConfig, chain blockChain) *TxPool {
 	// Sanitize the input to ensure no vulnerable gas prices are set
 	config = (&config).sanitize()
-
 	// Create the transaction pool with its initial settings
 	pool := &TxPool{
 		config:          config,
@@ -303,6 +336,7 @@ func NewTxPool(config TxPoolConfig, chainconfig *params.ChainConfig, chain block
 		reorgShutdownCh: make(chan struct{}),
 		gasPrice:        new(big.Int).SetUint64(config.PriceLimit),
 		mevBundles:      make(map[common.Hash]*types.MevBundle),
+		mevGasPricePool: NewMevGasPricePool(config.MevGasPricePoolExpireTime),
 	}
 	pool.locals = newAccountSet(pool.signer)
 	for _, addr := range config.Locals {
@@ -345,15 +379,17 @@ func (pool *TxPool) loop() {
 	var (
 		prevPending, prevQueued, prevStales int
 		// Start the stats reporting and transaction eviction tickers
-		report  = time.NewTicker(statsReportInterval)
-		evict   = time.NewTicker(evictionInterval)
-		journal = time.NewTicker(pool.config.Rejournal)
+		report          = time.NewTicker(statsReportInterval)
+		evict           = time.NewTicker(evictionInterval)
+		journal         = time.NewTicker(pool.config.Rejournal)
+		mevGasPricePool = time.NewTicker(pool.config.UpdateMevGasPricePoolInterval)
 		// Track the previous head headers for transaction reorgs
 		head = pool.chain.CurrentBlock()
 	)
 	defer report.Stop()
 	defer evict.Stop()
 	defer journal.Stop()
+	defer mevGasPricePool.Stop()
 
 	for {
 		select {
@@ -409,6 +445,10 @@ func (pool *TxPool) loop() {
 				}
 				pool.mu.Unlock()
 			}
+
+		// Handle cache of recent mev gas price
+		case <-mevGasPricePool.C:
+			pool.mevGasPricePool.Push(pool.calculateMinimalBundleGasPrice())
 		}
 	}
 }
@@ -542,9 +582,14 @@ func (pool *TxPool) GetMevBundles(hash common.Hash) *types.MevBundle {
 
 // MevBundles returns a list of bundles valid for the given blockNumber/blockTimestamp
 // also prunes bundles that are outdated
-func (pool *TxPool) MevBundles(blockNumber *big.Int, blockTimestamp uint64) ([]types.MevBundle, error) {
+func (pool *TxPool) MevBundles(blockNumber *big.Int, blockTimestamp uint64) ([]types.MevBundle, *big.Int, *big.Int) {
 	pool.mu.Lock()
 	defer pool.mu.Unlock()
+
+	var (
+		max *big.Int = common.Big0
+		min *big.Int = common.Big0
+	)
 
 	// returned values
 	var ret []types.MevBundle
@@ -567,11 +612,30 @@ func (pool *TxPool) MevBundles(blockNumber *big.Int, blockTimestamp uint64) ([]t
 		ret = append(ret, *bundle)
 		// keep the bundles around internally until they need to be pruned
 		bundles[uid] = bundle
+
+		if bundle.Txs.Len() == 0 {
+			continue
+		}
+		gasPrice := bundle.Txs[0].GasPrice()
+
+		// calculate P1, P2 price
+		if len(bundles) == 1 {
+			max = gasPrice
+			min = gasPrice
+			continue
+		}
+
+		if gasPrice.Cmp(max) > 0 {
+			max = gasPrice
+		}
+		if gasPrice.Cmp(min) < 0 {
+			min = gasPrice
+		}
 	}
 
 	pool.mevBundles = bundles
 	bundleGauge.Update(int64(len(pool.mevBundles)))
-	return ret, nil
+	return ret, max, min
 }
 
 func (pool *TxPool) PruneBundle(bundle common.Hash) {
@@ -588,9 +652,23 @@ func (pool *TxPool) SetBundle(bundleHash common.Hash, bundle *types.MevBundle) {
 }
 
 // AddMevBundle adds a mev bundle to the pool
-func (pool *TxPool) AddMevBundle(txs types.Transactions, maxBlockNumber *big.Int, minTimestamp, maxTimestamp uint64, revertingTxHashes []common.Hash) (common.Hash, error) {
+func (pool *TxPool) AddMevBundle(txs types.Transactions, maxBlockNumber *big.Int, minTimestamp, maxTimestamp uint64, revertingTxHashes []common.Hash, gasPriceFloor *big.Int) (common.Hash, error) {
 	senders := make(map[common.Address]bool)
+	txGasPrice := common.Big0
+	if len(txs) > 0 {
+		txGasPrice = txs[0].GasPrice()
+	}
+	minimalGasPrice := pool.MinimalBundleGasPrice()
+	if minimalGasPrice.Cmp(gasPriceFloor) < 0 {
+		minimalGasPrice = gasPriceFloor
+	}
+	if txGasPrice.Cmp(minimalGasPrice) < 0 {
+		return common.Hash{}, NewCustomError(fmt.Sprintf("tx gas price too low, expected %d at least", minimalGasPrice.Uint64()), GasPriceTooLowErrorCode)
+	}
 	for _, tx := range txs {
+		if txGasPrice.Cmp(tx.GasPrice()) != 0 {
+			return common.Hash{}, BundleGasPriceMismatchError
+		}
 		txSender, _ := types.Sender(pool.signer, tx)
 		senders[txSender] = true
 		if tx.GasPrice() == nil || tx.GasPrice().Cmp(big.NewInt(int64(pool.config.PriceLimit))) < 0 {
@@ -1610,6 +1688,57 @@ func (pool *TxPool) demoteUnexecutables() {
 			delete(pool.pending, addr)
 		}
 	}
+}
+
+func (pool *TxPool) getRecentBlocks() []*types.Block {
+	blocks := make([]*types.Block, 0, pool.config.MaxBundleBlocks)
+	block := pool.chain.CurrentBlock()
+	for i := 0; i < int(pool.config.MaxBundleBlocks); i++ {
+		if block == nil {
+			break
+		}
+		blocks = append(blocks, block)
+		block = pool.chain.GetBlockByHash(block.ParentHash())
+	}
+
+	return blocks
+}
+
+func (pool *TxPool) MinimalBundleGasPrice() *big.Int {
+	return pool.mevGasPricePool.MinimalGasPrice()
+}
+
+func (pool *TxPool) LatestBundleGasPrice() *big.Int {
+	return pool.mevGasPricePool.LatestGasPrice()
+}
+
+func (pool *TxPool) calculateMinimalBundleGasPrice() *big.Int {
+	recentBlocks := pool.getRecentBlocks()
+
+	txs := make([]*types.Transaction, 0, pool.config.BundleTxSampleNum*pool.config.MaxBundleBlocks)
+	for _, block := range recentBlocks {
+		txNum := 0
+		length := block.Transactions().Len()
+		for i := 0; i < length && txNum < int(pool.config.BundleTxSampleNum); i++ {
+			tx := block.Transactions()[i]
+			if tx.GasPrice().Cmp(common.Big0) == 0 {
+				continue
+			}
+			txs = append(txs, tx)
+			txNum++
+		}
+	}
+
+	if len(txs) == 0 {
+		return new(big.Int).Set(pool.gasPrice)
+	}
+
+	sort.SliceStable(txs, func(i, j int) bool {
+		return txs[i].GasPrice().Cmp(txs[j].GasPrice()) < 0
+	})
+	length := len(txs)
+	percentileIndex := length * int(pool.config.MevGasPricePercentile) / 100
+	return txs[percentileIndex].GasPrice()
 }
 
 // addressByHeartbeat is an account address tagged with its last activity timestamp.

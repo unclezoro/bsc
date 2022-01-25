@@ -70,6 +70,10 @@ func (bc *testBlockChain) GetBlock(hash common.Hash, number uint64) *types.Block
 	return bc.CurrentBlock()
 }
 
+func (bc *testBlockChain) GetBlockByHash(hash common.Hash) *types.Block {
+	return bc.CurrentBlock()
+}
+
 func (bc *testBlockChain) StateAt(common.Hash) (*state.StateDB, error) {
 	return bc.statedb, nil
 }

@@ -224,8 +224,12 @@ func (b *LesApiBackend) GetBundleByHash(ctx context.Context, bundleHash common.H
 	return nil
 }
 
-func (b *LesApiBackend) BundlePrice() (*big.Int, error) {
-	return nil, nil
+func (b *LesApiBackend) MinimalBundleGasPrice() *big.Int {
+	return nil
+}
+
+func (b *LesApiBackend) BundlePrice() *big.Int {
+	return nil
 }
 
 func (b *LesApiBackend) SubscribeNewTxsEvent(ch chan<- core.NewTxsEvent) event.Subscription {

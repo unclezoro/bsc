@@ -131,6 +131,11 @@ func (b *BlockGen) Number() *big.Int {
 	return new(big.Int).Set(b.header.Number)
 }
 
+// BaseFee returns the EIP-1559 base fee of the block being generated.
+func (b *BlockGen) BaseFee() *big.Int {
+	return new(big.Int).Set(b.header.BaseFee)
+}
+
 // AddUncheckedReceipt forcefully adds a receipts to the block without a
 // backing transaction.
 //
@@ -201,6 +206,18 @@ func GenerateChain(config *params.ChainConfig, parent *types.Block, engine conse
 		b := &BlockGen{i: i, chain: blocks, parent: parent, statedb: statedb, config: config, engine: engine}
 		b.header = makeHeader(chainreader, parent, statedb, b.engine)
 
+		// Set the difficulty for clique block. The chain maker doesn't have access
+		// to a chain, so the difficulty will be left unset (nil). Set it here to the
+		// correct value.
+		if b.header.Difficulty == nil {
+			if config.TerminalTotalDifficulty == nil {
+				// Clique chain
+				b.header.Difficulty = big.NewInt(2)
+			} else {
+				// Post-merge chain
+				b.header.Difficulty = big.NewInt(0)
+			}
+		}
 		// Mutate the state and block according to any hard-fork specs
 		if daoBlock := config.DAOForkBlock; daoBlock != nil {
 			limit := new(big.Int).Add(daoBlock, params.DAOForkExtraRange)
@@ -265,10 +282,18 @@ func makeHeader(chain consensus.ChainReader, parent *types.Block, state *state.S
 			Difficulty: parent.Difficulty(),
 			UncleHash:  parent.UncleHash(),
 		}),
-		GasLimit: CalcGasLimit(parent, parent.GasLimit(), parent.GasLimit()),
+		GasLimit: parent.GasLimit(),
 		Number:   new(big.Int).Add(parent.Number(), common.Big1),
 		Time:     time,
 	}
+	if chain.Config().IsLondon(header.Number) {
+		header.BaseFee = misc.CalcBaseFee(chain.Config(), parent.Header())
+		if !chain.Config().IsLondon(parent.Number()) {
+			parentGasLimit := parent.GasLimit() * params.ElasticityMultiplier
+			header.GasLimit = CalcGasLimit(parentGasLimit, parentGasLimit)
+		}
+	}
+	return header
 }
 
 // makeHeaderChain creates a deterministic chain of headers rooted at parent.
@@ -304,3 +329,4 @@ func (cr *fakeChainReader) GetHeaderByHash(hash common.Hash) *types.Header      
 func (cr *fakeChainReader) GetHeader(hash common.Hash, number uint64) *types.Header { return nil }
 func (cr *fakeChainReader) GetBlock(hash common.Hash, number uint64) *types.Block   { return nil }
 func (cr *fakeChainReader) GetHighestVerifiedHeader() *types.Header                 { return nil }
+func (cr *fakeChainReader) GetTd(hash common.Hash, number uint64) *big.Int          { return nil }

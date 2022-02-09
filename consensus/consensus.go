@@ -52,6 +52,9 @@ type ChainHeaderReader interface {
 
 	// GetHighestVerifiedHeader retrieves the highest header verified.
 	GetHighestVerifiedHeader() *types.Header
+
+	// GetTd retrieves the total difficulty from the database by hash and number.
+	GetTd(hash common.Hash, number uint64) *big.Int
 }
 
 // ChainReader defines a small collection of methods needed to access the local

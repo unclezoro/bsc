@@ -24,6 +24,7 @@ import (
 	"time"
 
 	"github.com/ethereum/go-ethereum/common"
+	"github.com/ethereum/go-ethereum/core/types"
 	"github.com/ethereum/go-ethereum/crypto"
 	"github.com/ethereum/go-ethereum/metrics"
 	"github.com/ethereum/go-ethereum/rlp"
@@ -65,7 +66,7 @@ func (s Storage) Copy() Storage {
 type StateObject struct {
 	address  common.Address
 	addrHash common.Hash // hash of ethereum address of the account
-	data     Account
+	data     types.StateAccount
 	db       *StateDB
 
 	// DB error.
@@ -110,7 +111,7 @@ type Account struct {
 }
 
 // newObject creates a state object.
-func newObject(db *StateDB, address common.Address, data Account) *StateObject {
+func newObject(db *StateDB, address common.Address, data types.StateAccount) *StateObject {
 	if data.Balance == nil {
 		data.Balance = new(big.Int)
 	}
@@ -239,7 +240,7 @@ func (s *StateObject) GetCommittedState(db Database, key common.Hash) common.Has
 		}
 		enc, err = s.db.snap.Storage(s.addrHash, crypto.Keccak256Hash(key.Bytes()))
 	}
-	// If snapshot unavailable or reading from it failed, load from the database
+	// If the snapshot is unavailable or reading from it fails, load from the database.
 	if s.db.snap == nil || err != nil {
 		if meter != nil {
 			// If we already spent time checking the snapshot, account for it
@@ -332,7 +333,7 @@ func (s *StateObject) finalise(prefetch bool) {
 // It will return nil if the trie has not been loaded and no changes have been made
 func (s *StateObject) updateTrie(db Database) Trie {
 	// Make sure all dirty slots are finalized into the pending storage area
-	s.finalise(false) // Don't prefetch any more, pull directly if need be
+	s.finalise(false) // Don't prefetch anymore, pull directly if need be
 	if len(s.pendingStorage) == 0 {
 		return s.trie
 	}
@@ -360,10 +361,12 @@ func (s *StateObject) updateTrie(db Database) Trie {
 		var v []byte
 		if (value == common.Hash{}) {
 			s.setError(tr.TryDelete(key[:]))
+			s.db.StorageDeleted += 1
 		} else {
 			// Encoding []byte cannot fail, ok to ignore the error.
 			v, _ = rlp.EncodeToBytes(common.TrimLeftZeroes(value[:]))
 			s.setError(tr.TryUpdate(key[:], v))
+			s.db.StorageUpdated += 1
 		}
 		// If state snapshotting is active, cache the data til commit
 		if s.db.snap != nil {
@@ -408,25 +411,26 @@ func (s *StateObject) updateRoot(db Database) {
 
 // CommitTrie the storage trie of the object to db.
 // This updates the trie root.
-func (s *StateObject) CommitTrie(db Database) error {
+func (s *StateObject) CommitTrie(db Database) (int, error) {
 	// If nothing changed, don't bother with hashing anything
 	if s.updateTrie(db) == nil {
 		if s.trie != nil && s.data.Root != emptyRoot {
 			db.CacheStorage(s.addrHash, s.data.Root, s.trie)
 		}
-		return nil
+		return 0, nil
 	}
 	if s.dbErr != nil {
-		return s.dbErr
+		return 0, s.dbErr
 	}
 	// Track the amount of time wasted on committing the storage trie
 	if metrics.EnabledExpensive {
 		defer func(start time.Time) { s.db.StorageCommits += time.Since(start) }(time.Now())
 	}
-	root, err := s.trie.Commit(nil)
+	root, committed, err := s.trie.Commit(nil)
 	if err == nil {
 		s.data.Root = root
 	}
+	return committed, err
 	if s.data.Root != emptyRoot {
 		db.CacheStorage(s.addrHash, s.data.Root, s.trie)
 	}

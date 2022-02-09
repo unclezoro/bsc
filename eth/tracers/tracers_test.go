@@ -27,6 +27,7 @@ import (
 	"github.com/ethereum/go-ethereum/core/types"
 	"github.com/ethereum/go-ethereum/core/vm"
 	"github.com/ethereum/go-ethereum/crypto"
+	"github.com/ethereum/go-ethereum/eth/tracers/logger"
 	"github.com/ethereum/go-ethereum/params"
 	"github.com/ethereum/go-ethereum/tests"
 )
@@ -73,6 +74,7 @@ func BenchmarkTransactionTrace(b *testing.B) {
 		Time:        new(big.Int).SetUint64(uint64(5)),
 		Difficulty:  big.NewInt(0xffffffff),
 		GasLimit:    gas,
+		BaseFee:     big.NewInt(8),
 	}
 	alloc := core.GenesisAlloc{}
 	// The code pushes 'deadbeef' into memory, then the other params, and calls CREATE2, then returns
@@ -94,14 +96,14 @@ func BenchmarkTransactionTrace(b *testing.B) {
 	}
 	_, statedb := tests.MakePreState(rawdb.NewMemoryDatabase(), alloc, false)
 	// Create the tracer, the EVM environment and run it
-	tracer := vm.NewStructLogger(&vm.LogConfig{
+	tracer := logger.NewStructLogger(&logger.Config{
 		Debug: false,
 		//DisableStorage: true,
 		//EnableMemory: false,
 		//EnableReturnData: false,
 	})
 	evm := vm.NewEVM(context, txContext, statedb, params.AllEthashProtocolChanges, vm.Config{Debug: true, Tracer: tracer})
-	msg, err := tx.AsMessage(signer)
+	msg, err := tx.AsMessage(signer, nil)
 	if err != nil {
 		b.Fatalf("failed to prepare transaction for tracing: %v", err)
 	}

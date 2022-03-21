@@ -165,7 +165,7 @@ func (s *StateObject) getTrie(db Database) Trie {
 		if s.data.Root != emptyRoot && s.db.prefetcher != nil {
 			// When the miner is creating the pending state, there is no
 			// prefetcher
-			s.trie = s.db.prefetcher.trie(s.data.Root)
+			//s.trie = s.db.prefetcher.trie(s.data.Root)
 		}
 		if s.trie == nil {
 			var err error
@@ -321,7 +321,7 @@ func (s *StateObject) finalise(prefetch bool) {
 		}
 	}
 	if s.db.prefetcher != nil && prefetch && len(slotsToPrefetch) > 0 && s.data.Root != emptyRoot {
-		s.db.prefetcher.prefetch(s.data.Root, slotsToPrefetch, s.addrHash)
+		//s.db.prefetcher.prefetch(s.data.Root, slotsToPrefetch, s.addrHash)
 	}
 	if len(s.dirtyStorage) > 0 {
 		s.dirtyStorage = make(Storage)
@@ -333,9 +333,9 @@ func (s *StateObject) finalise(prefetch bool) {
 func (s *StateObject) updateTrie(db Database) Trie {
 	// Make sure all dirty slots are finalized into the pending storage area
 	s.finalise(false) // Don't prefetch any more, pull directly if need be
-	if len(s.pendingStorage) == 0 {
-		return s.trie
-	}
+	//if len(s.pendingStorage) == 0 {
+	//	return s.trie
+	//}
 	// Track the amount of time wasted on updating the storage trie
 	if metrics.EnabledExpensive {
 		defer func(start time.Time) {
@@ -392,9 +392,15 @@ func (s *StateObject) updateTrie(db Database) Trie {
 // UpdateRoot sets the trie root to the current root hash of
 func (s *StateObject) updateRoot(db Database) {
 	// If nothing changed, don't bother with hashing anything
-	if s.updateTrie(db) == nil {
-		return
+	//if s.updateTrie(db) == nil {
+	//	return
+	//}
+	if acc, err := s.db.snap.Account(crypto.HashData(s.db.hasher, s.address.Bytes())); err == nil {
+		if acc != nil && len(acc.Root) != 0 {
+			s.data.Root = common.BytesToHash(acc.Root)
+		}
 	}
+	s.updateTrie(db)
 	// Track the amount of time wasted on hashing the storage trie
 	if metrics.EnabledExpensive {
 		defer func(start time.Time) {

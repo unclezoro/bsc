@@ -220,30 +220,30 @@ func (db *cachingDB) OpenStorageTrie(addrHash, root common.Hash) (Trie, error) {
 }
 
 func (db *cachingDB) CacheAccount(root common.Hash, t Trie) {
-	if db.accountTrieCache == nil {
-		return
-	}
-	tr := t.(*trie.SecureTrie)
-	db.accountTrieCache.Add(root, tr.ResetCopy())
+	//if db.accountTrieCache == nil {
+	//	return
+	//}
+	//tr := t.(*trie.SecureTrie)
+	//db.accountTrieCache.Add(root, tr.ResetCopy())
 }
 
 func (db *cachingDB) CacheStorage(addrHash common.Hash, root common.Hash, t Trie) {
-	if db.storageTrieCache == nil {
-		return
-	}
-	tr := t.(*trie.SecureTrie)
-	if tries, exist := db.storageTrieCache.Get(addrHash); exist {
-		triesArray := tries.([3]*triePair)
-		newTriesArray := [3]*triePair{
-			{root: root, trie: tr.ResetCopy()},
-			triesArray[0],
-			triesArray[1],
-		}
-		db.storageTrieCache.Add(addrHash, newTriesArray)
-	} else {
-		triesArray := [3]*triePair{{root: root, trie: tr.ResetCopy()}, nil, nil}
-		db.storageTrieCache.Add(addrHash, triesArray)
-	}
+	//if db.storageTrieCache == nil {
+	//	return
+	//}
+	//tr := t.(*trie.SecureTrie)
+	//if tries, exist := db.storageTrieCache.Get(addrHash); exist {
+	//	triesArray := tries.([3]*triePair)
+	//	newTriesArray := [3]*triePair{
+	//		{root: root, trie: tr.ResetCopy()},
+	//		triesArray[0],
+	//		triesArray[1],
+	//	}
+	//	db.storageTrieCache.Add(addrHash, newTriesArray)
+	//} else {
+	//	triesArray := [3]*triePair{{root: root, trie: tr.ResetCopy()}, nil, nil}
+	//	db.storageTrieCache.Add(addrHash, triesArray)
+	//}
 }
 
 func (db *cachingDB) Purge() {

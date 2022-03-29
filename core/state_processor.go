@@ -244,13 +244,14 @@ func (p *LightStateProcessor) LightProcess(diffLayer *types.DiffLayer, block *ty
 				}
 
 				//update storage
-				accountRootHash := previousAccount.Root
+				previousAccountRootHash := previousAccount.Root
+				latestAccountRootHash := previousAccountRootHash
 				snapMux.RLock()
 				storageChange, exist := snapStorage[diffAccount]
 				snapMux.RUnlock()
 
 				if exist && len(storageChange) > 0 {
-					accountTrie, err := statedb.Database().OpenStorageTrie(addrHash, accountRootHash)
+					accountTrie, err := statedb.Database().OpenStorageTrie(addrHash, previousAccountRootHash)
 					if err != nil {
 						errChan <- err
 						return
@@ -263,17 +264,19 @@ func (p *LightStateProcessor) LightProcess(diffLayer *types.DiffLayer, block *ty
 						}
 					}
 
-					accountRootHash = accountTrie.Hash()
-					diffMux.Lock()
-					diffTries[diffAccount] = accountTrie
-					diffMux.Unlock()
+					latestAccountRootHash = accountTrie.Hash()
+					if latestAccountRootHash != previousAccountRootHash {
+						diffMux.Lock()
+						diffTries[diffAccount] = accountTrie
+						diffMux.Unlock()
+					}
 				}
 
 				// can't trust the blob, need encode by our-self.
 				latestStateAccount := state.Account{
 					Nonce:    latestAccount.Nonce,
 					Balance:  latestAccount.Balance,
-					Root:     accountRootHash,
+					Root:     latestAccountRootHash,
 					CodeHash: latestAccount.CodeHash,
 				}
 				bz, err := rlp.EncodeToBytes(&latestStateAccount)
@@ -440,6 +443,7 @@ func applyTransaction(msg types.Message, config *params.ChainConfig, bc ChainCon
 	// by the tx.
 	receipt := &types.Receipt{Type: tx.Type(), PostState: root, CumulativeGasUsed: *usedGas}
 	if result.Failed() {
+		log.Info("===debug tx failed", "txhash", tx.Hash(), "return", string(result.ReturnData), "err", result.Err)
 		receipt.Status = types.ReceiptStatusFailed
 	} else {
 		receipt.Status = types.ReceiptStatusSuccessful

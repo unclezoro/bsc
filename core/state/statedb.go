@@ -1210,6 +1210,7 @@ func (s *StateDB) LightCommit() (common.Hash, *types.DiffLayer, error) {
 				tmpDiff := diff
 				tasks <- func() {
 					root, err := tmpDiff.Commit(nil)
+					log.Error("=== light commit diff trie", "addr", account, "root", root.String())
 					if err != nil {
 						taskResults <- err
 						return

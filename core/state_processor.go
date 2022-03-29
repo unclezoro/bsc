@@ -159,7 +159,7 @@ func (p *LightStateProcessor) LightProcess(diffLayer *types.DiffLayer, block *ty
 	for des := range snapDestructs {
 		stateTrie.TryDelete(des[:])
 	}
-	threads := gopool.Threads(len(snapAccounts))
+	threads := gopool.AggressiveThreads(len(snapAccounts))
 
 	iteAccounts := make([]common.Address, 0, len(snapAccounts))
 	for diffAccount := range snapAccounts {

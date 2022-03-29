@@ -58,3 +58,13 @@ func Threads(tasks int) int {
 	}
 	return threads
 }
+
+func AggressiveThreads(tasks int) int {
+	threads := tasks / minNumberPerTask
+	if threads > 3*runtime.NumCPU() {
+		threads = 3 * runtime.NumCPU()
+	} else if threads == 0 {
+		threads = 1
+	}
+	return threads
+}

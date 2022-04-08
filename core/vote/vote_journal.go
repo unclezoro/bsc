@@ -13,15 +13,13 @@ import (
 )
 
 const (
-	maxSizeOfRecentEntry = 256
+	maxSizeOfRecentEntry = 512
 )
 
 type VoteJournal struct {
 	journalPath string // file path of disk journal for saving the vote.
 
 	walLog *wal.Log
-
-	latestVote *types.VoteEnvelope // Maintain a variable to record the most recent vote of the local node.
 }
 
 func NewVoteJournal(filePath string) (*VoteJournal, error) {
@@ -34,33 +32,12 @@ func NewVoteJournal(filePath string) (*VoteJournal, error) {
 		return nil, err
 	}
 
-	lastIndex, err := walLog.LastIndex()
-	if err != nil {
-		log.Error("Failed to get lastIndex of vote journal", "err", err)
-		return nil, err
-	}
-
-	voteMessage, err := walLog.Read(lastIndex)
-	if err != nil && err != wal.ErrNotFound {
-		log.Error("Failed to read votes journal", "err", err)
-		return nil, err
-	}
-
-	var vote *types.VoteEnvelope
-
-	if voteMessage != nil {
-		vote = &types.VoteEnvelope{}
-		if err := json.Unmarshal(voteMessage, vote); err != nil {
-			log.Error("Failed to unmarshal vote in the proecss for intializing journal object", "err", err)
-			return nil, err
-		}
-	}
-
-	return &VoteJournal{
+	voteJournal := &VoteJournal{
 		journalPath: filePath,
 		walLog:      walLog,
-		latestVote:  vote,
-	}, nil
+	}
+
+	return voteJournal, nil
 }
 
 func (journal *VoteJournal) WriteVote(voteMessage *types.VoteEnvelope) error {
@@ -94,9 +71,27 @@ func (journal *VoteJournal) WriteVote(voteMessage *types.VoteEnvelope) error {
 			log.Warn("Failed to truncate votes journal", "err", err)
 		}
 	}
-	journal.latestVote = voteMessage
 
 	return nil
+}
+
+func (journal *VoteJournal) ReadVote(index uint64) (*types.VoteEnvelope, error) {
+	voteMessage, err := journal.walLog.Read(index)
+	if err != nil && err != wal.ErrNotFound {
+		log.Error("Failed to read votes journal", "err", err)
+		return nil, err
+	}
+
+	var vote *types.VoteEnvelope
+	if voteMessage != nil {
+		vote = &types.VoteEnvelope{}
+		if err := json.Unmarshal(voteMessage, vote); err != nil {
+			log.Error("Failed to unmarshal vote in the proecss for intializing journal object", "err", err)
+			return nil, err
+		}
+	}
+
+	return vote, nil
 }
 
 // Metrics to monitor if there's any error for writing vote journal.

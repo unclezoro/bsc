@@ -9,6 +9,7 @@ import (
 	"github.com/prysmaticlabs/prysm/validator/accounts/wallet"
 
 	"github.com/ethereum/go-ethereum/common"
+	"github.com/ethereum/go-ethereum/consensus"
 	"github.com/ethereum/go-ethereum/core"
 	"github.com/ethereum/go-ethereum/core/types"
 	"github.com/ethereum/go-ethereum/eth/downloader"
@@ -20,6 +21,10 @@ import (
 
 const (
 	maxForkLength = 11
+)
+
+type (
+	getHighestJustifiedHeader func(chain consensus.ChainHeaderReader, header *types.Header) *types.Header
 )
 
 // VoteManager will handle the vote produced by self.
@@ -35,9 +40,13 @@ type VoteManager struct {
 	pool    *VotePool
 	signer  *VoteSigner
 	journal *VoteJournal
+
+	engine consensus.PoSA
+
+	get getHighestJustifiedHeader
 }
 
-func NewVoteManager(mux *event.TypeMux, chainconfig *params.ChainConfig, chain *core.BlockChain, pool *VotePool, journalPath, bLSPassWordPath, bLSWalletPath string) (*VoteManager, error) {
+func NewVoteManager(mux *event.TypeMux, chainconfig *params.ChainConfig, chain *core.BlockChain, pool *VotePool, journalPath, bLSPassWordPath, bLSWalletPath string, engine consensus.PoSA, get getHighestJustifiedHeader) (*VoteManager, error) {
 	voteManager := &VoteManager{
 		mux: mux,
 
@@ -45,7 +54,10 @@ func NewVoteManager(mux *event.TypeMux, chainconfig *params.ChainConfig, chain *
 		chainconfig: chainconfig,
 		chainHeadCh: make(chan core.ChainHeadEvent, chainHeadChanSize),
 
-		pool: pool,
+		pool:   pool,
+		engine: engine,
+
+		get: get,
 	}
 
 	dirExists, err := wallet.Exists(bLSWalletPath)
@@ -131,86 +143,115 @@ func (voteManager *VoteManager) loop() {
 			if !startVote || cHead.Block == nil {
 				continue
 			}
+
 			curHead := cHead.Block.Header()
-
-			var lastLatestVoteNumber uint64
-			lastLatestVote := voteManager.journal.latestVote
-			if lastLatestVote == nil {
-				lastLatestVoteNumber = 0
-			} else {
-				lastLatestVoteNumber = lastLatestVote.Data.TargetNumber
+			// Check if cur validator is within the validatorSet at curHead
+			if !voteManager.engine.IsWithInSnapShot(voteManager.chain, curHead) {
+				continue
 			}
 
-			var newChainStack []*types.Header
-			for i := 0; i < maxForkLength; i++ {
-				if curHead == nil || curHead.Number.Uint64() <= lastLatestVoteNumber {
-					break
-				}
-				newChainStack = append(newChainStack, curHead)
-				curHead = voteManager.chain.GetHeader(curHead.ParentHash, curHead.Number.Uint64()-1)
+			// Vote for curBlockHeader block.
+			vote := &types.VoteData{
+				TargetNumber: curHead.Number.Uint64(),
+				TargetHash:   curHead.Hash(),
+			}
+			voteMessage := &types.VoteEnvelope{
+				Data: vote,
 			}
 
-			for i := len(newChainStack) - 1; i >= 0; i-- {
-				curBlockHeader := newChainStack[i]
-				// Vote for curBlockHeader block.
-				vote := &types.VoteData{
-					TargetNumber: curBlockHeader.Number.Uint64(),
-					TargetHash:   curBlockHeader.Hash(),
+			// Put Vote into journal and VotesPool if we are active validator and allow to sign it.
+			if ok, sourceNumber, sourceHash := voteManager.UnderRules(curHead); ok {
+				if sourceHash == (common.Hash{}) {
+					continue
 				}
-				voteMessage := &types.VoteEnvelope{
-					Data: vote,
+
+				voteMessage.Data.SourceNumber = sourceNumber
+				voteMessage.Data.SourceHash = sourceHash
+
+				if err := voteManager.signer.SignVote(voteMessage); err != nil {
+					log.Debug("Failed to sign vote", "err", err)
+					votesSigningErrorMetric(vote.TargetNumber, vote.TargetHash).Inc(1)
+					continue
 				}
-				// Put Vote into journal and VotesPool if we are active validator and allow to sign it.
-				if ok := voteManager.UnderRules(curBlockHeader); ok {
-					if err := voteManager.signer.SignVote(voteMessage); err != nil {
-						log.Debug("Failed to sign vote", "err", err)
-						votesSigningErrorMetric(vote.TargetNumber, vote.TargetHash).Inc(1)
-						continue
-					}
-					if err := voteManager.journal.WriteVote(voteMessage); err != nil {
-						log.Warn("Failed to write vote into journal", "err", err)
-						votesJournalErrorMetric(vote.TargetNumber, vote.TargetHash).Inc(1)
-						continue
-					}
-					log.Info("vote manager produced vote", "voteHash=", voteMessage.Hash())
-					voteManager.pool.PutVote(voteMessage)
-					votesManagerMetric(vote.TargetNumber, vote.TargetHash).Inc(1)
+				if err := voteManager.journal.WriteVote(voteMessage); err != nil {
+					log.Warn("Failed to write vote into journal", "err", err)
+					votesJournalErrorMetric(vote.TargetNumber, vote.TargetHash).Inc(1)
+					continue
 				}
+
+				log.Info("vote manager produced vote", "voteHash=", voteMessage.Hash())
+				voteManager.pool.PutVote(voteMessage)
+				votesManagerMetric(vote.TargetNumber, vote.TargetHash).Inc(1)
 			}
 		}
 	}
 }
 
-// UnderRules checks if the produced header under the Rule1: Validators always vote once and only once on one height,
-// Rule2: Validators always vote for the child of its previous vote within a predefined n blocks to avoid vote on two different
-// forks of chain.
-func (voteManager *VoteManager) UnderRules(header *types.Header) bool {
-	latestVote := voteManager.journal.latestVote
-	if latestVote == nil {
-		return true
+// UnderRules checks if the produced header under the following rules:
+// A validator must not publish two distinct votes for the same height. (Rule 1)
+// A validator must not vote within the span of its other votes . (Rule 2)
+// Validators always vote for their canonical chain’s latest block. (Rule 3)
+func (voteManager *VoteManager) UnderRules(header *types.Header) (bool, uint64, common.Hash) {
+	curHighestJustifiedHeader := voteManager.get(voteManager.chain, header)
+	if curHighestJustifiedHeader == nil {
+		//return true, 0, common.Hash{}
+		//TODO, For Integration Test only!:
+		return true, header.Number.Uint64() - 1, header.ParentHash
 	}
 
-	latestBlockNumber := latestVote.Data.TargetNumber
-	latestBlockHash := latestVote.Data.TargetHash
+	sourceBlockNumber := curHighestJustifiedHeader.Number.Uint64()
+	sourceBlockHash := curHighestJustifiedHeader.Hash()
+	targetBlockNumber := header.Number.Uint64()
 
-	// Check for Rules.
-	if header.Number.Uint64() > latestBlockNumber+maxForkLength {
-		return true
+	journal := voteManager.journal
+	walLog := journal.walLog
+
+	firstIndex, err := walLog.FirstIndex()
+	if err != nil {
+		log.Error("Failed to get firstIndex of vote journal", "err", err)
+		return false, 0, common.Hash{}
 	}
 
-	curBlockHeader := header
-	if curBlockHeader.Number.Uint64() <= latestBlockNumber {
-		return false
+	lastIndex, err := walLog.LastIndex()
+	if err != nil {
+		log.Error("Failed to get lastIndex of vote journal", "err", err)
+		return false, 0, common.Hash{}
 	}
 
-	for curBlockHeader != nil && curBlockHeader.Number.Uint64() >= latestBlockNumber {
-		if curBlockHeader.Number.Uint64() == latestBlockNumber {
-			return curBlockHeader.Hash() == latestBlockHash
+	journalLatestVote, err := journal.ReadVote(lastIndex)
+	if err != nil {
+		return false, 0, common.Hash{}
+	}
+	if journalLatestVote == nil {
+		// Indicate there's no vote before in local node, so it must be under rules.
+		return true, sourceBlockNumber, sourceBlockHash
+	}
+
+	for index := lastIndex; index >= firstIndex; index-- {
+		vote, err := journal.ReadVote(index)
+		if err != nil {
+			return false, 0, common.Hash{}
 		}
-		curBlockHeader = voteManager.chain.GetHeader(curBlockHeader.ParentHash, curBlockHeader.Number.Uint64()-1)
+		if vote == nil {
+			log.Error("vote is nil")
+			return false, 0, common.Hash{}
+		}
+
+		if targetBlockNumber == vote.Data.TargetNumber {
+			return false, 0, common.Hash{}
+		}
+
+		if vote.Data.SourceNumber > sourceBlockNumber && vote.Data.TargetNumber < targetBlockNumber {
+			log.Warn("curHeader's vote source and target are within its other votes")
+			return false, 0, common.Hash{}
+		}
+		if vote.Data.SourceNumber < sourceBlockNumber && vote.Data.TargetNumber > targetBlockNumber {
+			log.Warn("Other votes source and target are within curHeader's")
+			return false, 0, common.Hash{}
+		}
 	}
 
-	return false
+	return true, sourceBlockNumber, sourceBlockHash
 }
 
 // Metrics to monitor if voteManager worked in the expetected logic.

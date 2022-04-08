@@ -1019,15 +1019,39 @@ func (p *Parlia) FinalizeAndAssemble(chain consensus.ChainHeaderReader, header *
 	return blk, receipts, nil
 }
 
-// VerifyVote will verify if the vote comes from valid validators.
+func (p *Parlia) IsWithInSnapShot(chain consensus.ChainHeaderReader, header *types.Header) bool {
+	number := header.Number.Uint64()
+	snap, err := p.snapshot(chain, number-1, header.ParentHash, nil)
+	if err != nil {
+		log.Error("failed to get the snapshot from consensus", "error", err)
+		return false
+	}
+	validators := snap.Validators
+	if _, ok := validators[p.val]; ok {
+		return true
+	}
+	return false
+}
+
+// VerifyVote will verify: 1. If the vote comes from valid validators 2. If the vote's sourceNumber and sourceHash are correct
 func (p *Parlia) VerifyVote(chain consensus.ChainHeaderReader, vote *types.VoteEnvelope) bool {
 	voteBlockNumber := vote.Data.TargetNumber
 	voteBlockHash := vote.Data.TargetHash
-	header := chain.GetHeader(voteBlockHash, voteBlockNumber)
+	header := chain.GetHeaderByHash(voteBlockHash)
 	if header == nil {
-		log.Error("BlockHeader at current voteBlockNumber is nil", "blockNumber=", voteBlockNumber, "blockHash=", voteBlockHash)
+		log.Error("BlockHeader at current voteBlockNumber is nil", "blockNumber", voteBlockNumber, "blockHash", voteBlockHash)
 		return false
 	}
+
+	curHighestJustifiedHeader := p.GetHighestJustifiedHeader(chain, header)
+	if curHighestJustifiedHeader == nil {
+		log.Error("failed to get the highest justified header", "headerNumber", header.Number, "headerHash", header.Hash())
+		return false
+	}
+	if vote.Data.SourceNumber != curHighestJustifiedHeader.Number.Uint64() || vote.Data.SourceHash != curHighestJustifiedHeader.Hash() {
+		return false
+	}
+
 	number := header.Number.Uint64()
 	snap, err := p.snapshot(chain, number-1, header.ParentHash, nil)
 	if err != nil {
@@ -1042,6 +1066,7 @@ func (p *Parlia) VerifyVote(chain consensus.ChainHeaderReader, vote *types.VoteE
 			return true
 		}
 	}
+
 	return false
 }
 
@@ -1499,7 +1524,7 @@ func (p *Parlia) applyTransaction(
 	return nil
 }
 
-func (p *Parlia) GetHighestJustifiedHeader(chain consensus.ChainReader, header *types.Header) *types.Header {
+func (p *Parlia) GetHighestJustifiedHeader(chain consensus.ChainHeaderReader, header *types.Header) *types.Header {
 	return nil
 }
 

@@ -1086,7 +1086,9 @@ func (w *worker) commitNewWork(interrupt *int32, noempty bool, timestamp int64) 
 		}
 
 		commitTxsTimer.UpdateSince(start)
-		log.Info("Gas pool", "height", header.Number.String(), "pool", w.current.gasPool.String())
+		if w.current.gasPool != nil {
+			log.Info("Gas pool", "height", header.Number.String(), "pool", w.current.gasPool.String())
+		}
 	} else if w.config.IsFlashbots && header.Difficulty.Cmp(big.NewInt(1)) > 0 && len(bundles) > 0 {
 		start := time.Now()
 		commitBundles(bundles)

@@ -722,11 +722,13 @@ func (db *Database) Commit(node common.Hash, report bool, callback func(common.H
 	batch := db.diskdb.NewBatch()
 
 	// Move all of the accumulated preimages into a write batch
+	db.lock.RLock()
 	if db.preimages != nil {
 		rawdb.WritePreimages(batch, db.preimages)
 		// Since we're going to replay trie node writes into the clean cache, flush out
 		// any batched pre-images before continuing.
 		if err := batch.Write(); err != nil {
+			db.lock.RUnlock()
 			return err
 		}
 		batch.Reset()

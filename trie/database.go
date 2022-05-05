@@ -734,7 +734,6 @@ func (db *Database) Commit(node common.Hash, report bool, callback func(common.H
 		batch.Reset()
 	}
 	// Move the trie itself into the batch, flushing if enough data is accumulated
-	db.lock.RLock()
 	nodes, storage := len(db.dirties), db.dirtiesSize
 	db.lock.RUnlock()
 

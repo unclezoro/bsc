@@ -20,6 +20,7 @@ import (
 	"fmt"
 	"time"
 
+	"github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/consensus"
 	"github.com/ethereum/go-ethereum/core/state"
 	"github.com/ethereum/go-ethereum/core/types"
@@ -135,13 +136,13 @@ func (v *BlockValidator) ValidateState(block *types.Block, statedb *state.StateD
 			return nil
 		},
 	}
-	if skipHeavyVerify {
+	if statedb.IsPipeCommit() {
 		validateFuns = append(validateFuns, func() error {
 			if err := statedb.WaitPipeVerification(); err != nil {
 				return err
 			}
+			statedb.CorrectAccountsRoot(common.Hash{})
 			statedb.Finalise(v.config.IsEIP158(header.Number))
-			statedb.AccountsIntermediateRoot()
 			return nil
 		})
 	} else {

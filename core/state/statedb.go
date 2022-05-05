@@ -1506,11 +1506,6 @@ func (s *StateDB) Commit(failPostCommitFunc func(), postCommitFuncs ...func() er
 	} else {
 		commitFuncs = append(commitFuncs, commmitTrie)
 	}
-	if s.pipeCommit {
-		go commmitTrie()
-	} else {
-		commitFuncs = append(commitFuncs, commmitTrie)
-	}
 	commitRes := make(chan error, len(commitFuncs))
 	for _, f := range commitFuncs {
 		tmpFunc := f

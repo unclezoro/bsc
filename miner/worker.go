@@ -687,6 +687,7 @@ func (w *worker) bundlePruneLoop() {
 				Extra:      w.extra,
 				Time:       uint64(time.Now().Unix()),
 				Difficulty: big.NewInt(2),
+				BaseFee:    parent.BaseFee(),
 			}
 			pruneBundles := func() {
 				bundles, _, _ := w.eth.TxPool().MevBundles(num.Add(num, common.Big1), uint64(time.Now().Unix()))

@@ -204,9 +204,9 @@ func (b *testWorkerBackend) newRandomTx(creation bool, addr common.Address, key 
 	var tx *types.Transaction
 	gasPrice := big.NewInt(10 * params.InitialBaseFee)
 	if creation {
-		tx, _ = types.SignTx(types.NewContractCreation(b.txPool.Nonce(testBankAddress), big.NewInt(0), testGas, gasPrice, common.FromHex(testCode)), types.HomesteadSigner{}, testBankKey)
+		tx, _ = types.SignTx(types.NewContractCreation(b.txPool.Nonce(testBankAddress), big.NewInt(0), testGas, gasPrice, common.FromHex(testCode)), types.HomesteadSigner{}, key)
 	} else {
-		tx, _ = types.SignTx(types.NewTransaction(b.txPool.Nonce(testBankAddress), testUserAddress, big.NewInt(1000), params.TxGas, gasPrice, nil), types.HomesteadSigner{}, testBankKey)
+		tx, _ = types.SignTx(types.NewTransaction(b.txPool.Nonce(testBankAddress), testUserAddress, big.NewInt(1000), params.TxGas, gasPrice, nil), types.HomesteadSigner{}, key)
 	}
 	return tx
 }
@@ -347,14 +347,14 @@ func testGenerateBlockAndImport(t *testing.T, isClique, mev bool) {
 		_, err = b.txPool.AddMevBundle([]*types.Transaction{
 			b.newRandomTx(false, testBankAddress2, testBankKey2),
 			b.newRandomTx(false, testBankAddress, testBankKey),
-		}, nil, 0, 0, nil, common.Big0)
+		}, nil, 0, 0, nil, common.Big1)
 		if err == nil || err.Error() != "only one tx sender is allowed within one bundle" {
 			t.Fatalf("Unexpected error %v", err)
 		}
 		// Invalid gas price
 		lowGastx, _ := types.SignTx(types.NewTransaction(b.txPool.Nonce(testBankAddress2), testUserAddress, big.NewInt(1000), params.TxGas, big.NewInt(0), nil), types.HomesteadSigner{}, testBankKey2)
 
-		_, err = b.txPool.AddMevBundle([]*types.Transaction{lowGastx}, nil, 0, 0, nil, common.Big0)
+		_, err = b.txPool.AddMevBundle([]*types.Transaction{lowGastx}, nil, 0, 0, nil, common.Big1)
 		if err == nil || err.Error() != "tx gas price too low, expected 1 at least" {
 			t.Fatalf("Unexpected error %v", err)
 		}

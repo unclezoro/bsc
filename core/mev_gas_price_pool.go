@@ -64,8 +64,8 @@ func (pool *MevGasPricePool) LatestGasPrice() *big.Int {
 
 // MinimalGasPrice is a method to get minimal cached gas price.
 func (pool *MevGasPricePool) MinimalGasPrice() *big.Int {
-	pool.mu.RLock()
-	defer pool.mu.RUnlock()
+	pool.mu.Lock()
+	defer pool.mu.Unlock()
 	if pool.queue.Empty() {
 		return common.Big0
 	}

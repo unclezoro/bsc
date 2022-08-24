@@ -922,7 +922,7 @@ func (w *worker) commitTransaction(env *environment, tx *types.Transaction, rece
 	env.receipts = append(env.receipts, receipt)
 
 	gasUsed := new(big.Int).SetUint64(receipt.GasUsed)
-	w.current.profit.Add(w.current.profit, gasUsed.Mul(gasUsed, tx.GasPrice()))
+	env.profit.Add(env.profit, gasUsed.Mul(gasUsed, tx.GasPrice()))
 	return receipt.Logs, nil
 }
 
@@ -1244,8 +1244,8 @@ func (w *worker) fillTransactions(interrupt *int32, env *environment) {
 		}
 
 		commitTxsTimer.UpdateSince(start)
-		if w.current.gasPool != nil {
-			log.Info("Gas pool", "height", env.header.Number.String(), "pool", w.current.gasPool.String())
+		if env.gasPool != nil {
+			log.Info("Gas pool", "height", env.header.Number.String(), "pool", env.gasPool.String())
 		}
 	} else if w.config.IsFlashbots && env.header.Difficulty.Cmp(big.NewInt(1)) > 0 && len(bundles) > 0 {
 		start := time.Now()

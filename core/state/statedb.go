@@ -230,11 +230,10 @@ func (s *StateDB) StopPrefetcher() {
 		return
 	}
 	s.prefetcherLock.Lock()
-	defer s.prefetcherLock.Unlock()
 	if s.prefetcher != nil {
 		s.prefetcher.close()
-		s.prefetcher = nil
 	}
+	s.prefetcherLock.Unlock()
 }
 
 func (s *StateDB) TriePrefetchInAdvance(block *types.Block, signer types.Signer) {
@@ -657,16 +656,14 @@ func (s *StateDB) getDeletedStateObject(addr common.Address) *StateObject {
 		return obj
 	}
 	// If no live objects are available, attempt to use snapshots
-	var (
-		data *types.StateAccount
-		err  error
-	)
+	var data *types.StateAccount
 	if s.snap != nil {
+		start := time.Now()
+		acc, err := s.snap.Account(crypto.HashData(s.hasher, addr.Bytes()))
 		if metrics.EnabledExpensive {
-			defer func(start time.Time) { s.SnapshotAccountReads += time.Since(start) }(time.Now())
+			s.SnapshotAccountReads += time.Since(start)
 		}
-		var acc *snapshot.Account
-		if acc, err = s.snap.Account(crypto.HashData(s.hasher, addr.Bytes())); err == nil {
+		if err == nil {
 			if acc == nil {
 				return nil
 			}
@@ -686,7 +683,7 @@ func (s *StateDB) getDeletedStateObject(addr common.Address) *StateObject {
 	}
 
 	// If snapshot unavailable or reading from it failed, load from the database
-	if s.snap == nil || err != nil {
+	if data == nil {
 		if s.trie == nil {
 			tr, err := s.db.OpenTrie(s.originalRoot)
 			if err != nil {
@@ -695,10 +692,11 @@ func (s *StateDB) getDeletedStateObject(addr common.Address) *StateObject {
 			}
 			s.trie = tr
 		}
-		if metrics.EnabledExpensive {
-			defer func(start time.Time) { s.AccountReads += time.Since(start) }(time.Now())
-		}
+		start := time.Now()
 		enc, err := s.trie.TryGet(addr.Bytes())
+		if metrics.EnabledExpensive {
+			s.AccountReads += time.Since(start)
+		}
 		if err != nil {
 			s.setError(fmt.Errorf("getDeleteStateObject (%x) error: %v", addr.Bytes(), err))
 			return nil
@@ -1156,15 +1154,7 @@ func (s *StateDB) StateIntermediateRoot() common.Hash {
 	// the remainder without, but pre-byzantium even the initial prefetcher is
 	// useless, so no sleep lost.
 	prefetcher := s.prefetcher
-	defer func() {
-		s.prefetcherLock.Lock()
-		if s.prefetcher != nil {
-			s.prefetcher.close()
-			s.prefetcher = nil
-		}
-		// try not use defer inside defer
-		s.prefetcherLock.Unlock()
-	}()
+	defer s.StopPrefetcher()
 
 	// Now we're about to start to write changes to the trie. The trie is so far
 	// _untouched_. We can check with the prefetcher, if it can give us a trie
@@ -1357,10 +1347,12 @@ func (s *StateDB) LightCommit() (common.Hash, *types.DiffLayer, error) {
 // Commit writes the state to the underlying in-memory trie database.
 func (s *StateDB) Commit(failPostCommitFunc func(), postCommitFuncs ...func() error) (common.Hash, *types.DiffLayer, error) {
 	if s.dbErr != nil {
+		s.StopPrefetcher()
 		return common.Hash{}, nil, fmt.Errorf("commit aborted due to earlier error: %v", s.dbErr)
 	}
 	// Finalize any pending changes and merge everything into the tries
 	if s.lightProcessed {
+		defer s.StopPrefetcher()
 		root, diff, err := s.LightCommit()
 		if err != nil {
 			return root, diff, err
@@ -1568,6 +1560,7 @@ func (s *StateDB) Commit(failPostCommitFunc func(), postCommitFuncs ...func() er
 	if s.pipeCommit {
 		go commmitTrie()
 	} else {
+		defer s.StopPrefetcher()
 		commitFuncs = append(commitFuncs, commmitTrie)
 	}
 	commitRes := make(chan error, len(commitFuncs))

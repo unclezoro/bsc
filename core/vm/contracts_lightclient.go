@@ -290,6 +290,7 @@ func proofOpsVerifier(poz merkle.ProofOperators) error {
 		if _, ok := poz[0].(iavl.IAVLValueOp); !ok {
 			return cmn.NewError("invalid proof op")
 		}
+		fmt.Println("it is iavl commit")
 		return nil
 	}
 
@@ -307,6 +308,7 @@ func proofOpsVerifier(poz merkle.ProofOperators) error {
 		if op1.Type != lightclient.ProofOpIAVLCommitment {
 			return cmn.NewError("invalid proof op")
 		}
+		fmt.Println("it is ics32 commit")
 		return nil
 	}
 

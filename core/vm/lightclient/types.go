@@ -249,7 +249,7 @@ func (kvmp *KeyValueMerkleProof) Validate() bool {
 			return false
 		}
 	}
-
+	fmt.Println("run to bohr precompile")
 	kp := merkle.KeyPath{}
 	kp = kp.AppendKey([]byte(kvmp.StoreName), merkle.KeyEncodingURL)
 	kp = kp.AppendKey(kvmp.Key, merkle.KeyEncodingURL)

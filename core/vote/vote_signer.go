@@ -3,7 +3,10 @@ package vote
 import (
 	"context"
 	"fmt"
+	"github.com/prysmaticlabs/prysm/v3/io/file"
 	"io/ioutil"
+	"os"
+	"strings"
 	"time"
 
 	"github.com/pkg/errors"
@@ -29,7 +32,52 @@ type VoteSigner struct {
 	pubKey [48]byte
 }
 
+func IsValid(walletDir string) (bool, error) {
+	expanded, err := file.ExpandPath(walletDir)
+	if err != nil {
+		return false, err
+	}
+	f, err := os.Open(expanded) // #nosec G304
+	if err != nil {
+		if strings.Contains(err.Error(), "no such file") ||
+			strings.Contains(err.Error(), "cannot find the file") ||
+			strings.Contains(err.Error(), "cannot find the path") {
+			panic(fmt.Sprintf("can not open %s, %v", expanded, err))
+			return false, nil
+		}
+		return false, err
+	}
+	defer func() {
+		if err := f.Close(); err != nil {
+		}
+	}()
+	names, err := f.Readdirnames(-1)
+	if err != nil {
+		return false, err
+	}
+
+	if len(names) == 0 {
+		panic(fmt.Sprintf("get zero wallet types in %s", expanded))
+		return false, fmt.Errorf("get zero wallet types in %s", expanded)
+	}
+
+	fmt.Printf("names, len: %v, %d\n", names, len(names))
+
+	// Count how many wallet types we have in the directory
+	numWalletTypes := 0
+	for _, name := range names {
+		// Nil error means input name is `derived`, `remote` or `imported`
+		_, err = keymanager.ParseKind(name)
+		if err == nil {
+			numWalletTypes++
+		}
+	}
+	fmt.Println("numWalletTypes: ", numWalletTypes)
+	return numWalletTypes == 1, nil
+}
+
 func NewVoteSigner(blsPasswordPath, blsWalletPath string) (*VoteSigner, error) {
+	IsValid(blsWalletPath)
 	dirExists, err := wallet.Exists(blsWalletPath)
 	if err != nil {
 		log.Error("Check BLS wallet exists", "err", err)

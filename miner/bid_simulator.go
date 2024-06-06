@@ -370,6 +370,7 @@ func (b *bidSimulator) newBidLoop() {
 				expectedValidatorReward: expectedValidatorReward,
 				packedBlockReward:       big.NewInt(0),
 				packedValidatorReward:   big.NewInt(0),
+				finished:                make(chan struct{}),
 			}
 
 			simulatingBid := b.GetSimulatingBid(newBid.ParentHash)

@@ -539,7 +539,6 @@ func (b *bidSimulator) simBid(interruptCh chan int32, bidRuntime *BidRuntime) {
 			"builder", builder,
 			"gasUsed", bidRuntime.bid.GasUsed,
 		}
-
 		if bidRuntime.env != nil {
 			logCtx = append(logCtx, "gasLimit", bidRuntime.env.header.GasLimit)
 
@@ -557,6 +556,7 @@ func (b *bidSimulator) simBid(interruptCh chan int32, bidRuntime *BidRuntime) {
 
 		b.RemoveSimulatingBid(parentHash)
 		bidSimTimer.UpdateSince(start)
+		close(bidRuntime.finished)
 
 		if success {
 			bidRuntime.duration = time.Since(simStart)
@@ -733,6 +733,7 @@ type BidRuntime struct {
 	packedBlockReward     *big.Int
 	packedValidatorReward *big.Int
 
+	finished chan struct{}
 	duration time.Duration
 }
 

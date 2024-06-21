@@ -21,6 +21,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"math/big"
 	"os"
 	"path/filepath"
 	"strings"
@@ -220,6 +221,26 @@ block is used.
 				Description: `
 The export-preimages command exports hash preimages to a flat file, in exactly
 the expected order for the overlay tree migration.
+`,
+			},
+			{
+				Name:      "traverse-var",
+				Usage:     "Dump a specific block from storage (same as 'geth dump' but using snapshots)",
+				ArgsUsage: "[? <blockHash> | <blockNum>]",
+				Action:    traversalVar,
+				Flags: flags.Merge([]cli.Flag{
+					utils.ExcludeCodeFlag,
+					utils.ExcludeStorageFlag,
+					utils.StartKeyFlag,
+					utils.DumpLimitFlag,
+					utils.TriesInMemoryFlag,
+				}, utils.NetworkFlags, utils.DatabaseFlags),
+				Description: `
+This command is semantically equivalent to 'geth dump', but uses the snapshots
+as the backend data source, making this command a lot faster.
+
+The argument is interpreted as block number or hash. If none is provided, the latest
+block is used.
 `,
 			},
 		},
@@ -1020,3 +1041,161 @@ func checkAccount(ctx *cli.Context) error {
 	log.Info("Checked the snapshot journalled storage", "time", common.PrettyDuration(time.Since(start)))
 	return nil
 }
+
+func traversalVar(ctx *cli.Context) error {
+	stack, _ := makeConfigNode(ctx)
+	defer stack.Close()
+
+	_, db, root, err := parseDumpConfig(ctx, stack)
+	if err != nil {
+		return err
+	}
+	defer db.Close()
+	triedb := utils.MakeTrieDatabase(ctx, stack, db, false, true, false)
+	defer triedb.Close()
+
+	snapConfig := snapshot.Config{
+		CacheSize:  256,
+		Recovery:   false,
+		NoBuild:    true,
+		AsyncBuild: false,
+	}
+	triesInMemory := ctx.Uint64(utils.TriesInMemoryFlag.Name)
+	snaptree, err := snapshot.New(snapConfig, db, triedb, root, int(triesInMemory), false)
+	snapshot := snaptree.Snapshot(root)
+	if err != nil {
+		return err
+	}
+	contractAddress := common.HexToAddress("0xC806e70a62eaBC56E3Ee0c2669c2FF14452A9B3d")
+	emptyKeyCount := 0
+	varCount := 0
+	arrayCount := 0
+	arrayVarCount := 0
+	for i := 0; ; i++ {
+		key := common.BigToHash(big.NewInt(int64(i)))
+		enc, encErr := snapshot.Storage(crypto.Keccak256Hash(contractAddress[:]), crypto.Keccak256Hash(key.Bytes()))
+		if encErr != nil {
+			log.Info(fmt.Sprintf("key: %s, storage error: %v", key.String(), encErr))
+			continue
+		}
+		if len(enc) > 0 {
+			log.Info(common.BytesToHash(enc).String())
+			emptyKeyCount = 0
+			if isArr, arrLen := isArray(snapshot, contractAddress, key); isArr {
+				arrayVarCount += arrLen
+				arrayCount++
+			} else {
+				varCount++
+			}
+
+		} else {
+			emptyKeyCount++
+		}
+		if emptyKeyCount == 20 {
+			break
+		}
+	}
+	log.Info("array count:", arrayCount, "array item count", arrayVarCount, "var count", varCount)
+	return nil
+}
+
+func isArray(snap snapshot.Snapshot, contractAddress common.Address, slotIdx common.Hash) (result bool, slotLen int) {
+	start := crypto.Keccak256Hash(slotIdx.Bytes())
+	log.Info("start", start.String())
+	emptyValue := 0
+	hasValue := false
+	for i := 0; ; i++ {
+		idx := common.BigToHash(big.NewInt(0).Add(start.Big(), big.NewInt(int64(i))))
+		log.Info("idx:", idx.String(), "big", idx.Big().String())
+		enc, err := snap.Storage(crypto.Keccak256Hash(contractAddress[:]), crypto.Keccak256Hash(idx.Bytes()))
+		if err != nil {
+			log.Info("storage error", err.Error(), "slot", idx.String())
+			continue
+		}
+		if len(enc) == 0 {
+			emptyValue++
+		} else {
+			log.Info("isArray", common.BytesToHash(enc).String())
+			emptyValue = 0
+			hasValue = true
+			slotLen++
+		}
+		if emptyValue == 10 {
+			break
+		}
+	}
+	result = hasValue
+
+	return
+}
+
+/*
+// SPDX-License-Identifier: MIT
+pragma solidity >=0.6.12 <0.9.0;
+
+contract HelloWorld {
+  uint a;
+  bytes32 b;
+  mapping(uint => uint) c;
+  uint[3] d;
+  uint[] e;
+  bytes f;
+  bool g;
+  uint256 h;
+
+
+  function print() public pure returns (string memory) {
+    return "Hello Const!";
+  }
+
+   constructor() {
+    // 状态变量通过其名称访问，而不是通过例如 this.owner 的方式访问。
+    // 这也适用于函数，特别是在构造函数中，你只能像这样（“内部地”）调用它们，
+    // 因为合约本身还不存在。
+    a = 1;
+    b = "constbh contract";
+    for (uint i=0; i<20; i++)
+    {
+      c[i] = i;
+    }
+    d = [1,2,3];
+    e = [4,5,6];
+    f = "a";
+    g = true;
+    h = 8;
+  }
+
+  function getA() public view returns (uint) {
+    return a;
+  }
+
+  function getB() public view returns (bytes32) {
+    return b;
+  }
+
+  function getCByValue(uint key) public view returns (uint) {
+    return c[key];
+  }
+
+  function getD() public view returns (uint256[3] memory) {
+    return d;
+  }
+
+  function getE() public view returns (uint256[] memory) {
+    return e;
+  }
+
+  function getF() public view returns (bytes memory) {
+    return f;
+  }
+
+  function getG() public view returns (bool) {
+    return g;
+  }
+
+  function getH() public view returns (uint256) {
+    return h;
+  }
+}
+
+*/

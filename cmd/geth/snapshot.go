@@ -25,6 +25,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/prometheus/tsdb/fileutil"
@@ -1051,8 +1052,8 @@ func traversalVar(ctx *cli.Context) error {
 		return err
 	}
 	defer db.Close()
-	triedb := utils.MakeTrieDatabase(ctx, stack, db, false, true, false)
-	defer triedb.Close()
+	tdb := utils.MakeTrieDatabase(ctx, stack, db, false, true, false)
+	defer tdb.Close()
 
 	snapConfig := snapshot.Config{
 		CacheSize:  256,
@@ -1061,12 +1062,64 @@ func traversalVar(ctx *cli.Context) error {
 		AsyncBuild: false,
 	}
 	triesInMemory := ctx.Uint64(utils.TriesInMemoryFlag.Name)
-	snaptree, err := snapshot.New(snapConfig, db, triedb, root, int(triesInMemory), false)
-	snapshot := snaptree.Snapshot(root)
+	snaptree, err := snapshot.New(snapConfig, db, tdb, root, int(triesInMemory), false)
+	snap := snaptree.Snapshot(root)
 	if err != nil {
 		return err
 	}
-	contractAddress := common.HexToAddress("0xC806e70a62eaBC56E3Ee0c2669c2FF14452A9B3d")
+
+	//
+	pool := make(chan struct{}, 20)
+	defer close(pool)
+	waitGroup := &sync.WaitGroup{}
+
+	it := db.NewIterator(nil, nil)
+	defer it.Release()
+
+	hasher := crypto.NewKeccakState()
+
+	// Inspect key-value database first.
+	for it.Next() {
+		key := it.Key()
+		switch {
+		case bytes.HasPrefix(key, rawdb.SnapshotAccountPrefix) && len(key) == (len(rawdb.SnapshotAccountPrefix)+common.HashLength):
+			accountAddress := common.BytesToAddress(key)
+			log.Info(fmt.Sprintf("address:%s", accountAddress.String()))
+			pool <- struct{}{}
+			waitGroup.Add(1)
+			go func(address common.Address) {
+				defer waitGroup.Done()
+				<-pool
+				traversalContract(snap, address, hasher)
+			}(accountAddress)
+		}
+	}
+
+	waitGroup.Wait()
+
+	return nil
+}
+
+func traversalContract(snapshot snapshot.Snapshot, contractAddress common.Address, hasher crypto.KeccakState) {
+	var slimAccount *types.SlimAccount
+	var err error
+	for retry := 0; retry < 5; retry++ {
+		slimAccount, err = snapshot.Account(crypto.HashData(hasher, contractAddress.Bytes()))
+		if err != nil {
+			time.Sleep(5 * time.Millisecond)
+			continue
+		}
+		break
+	}
+	if slimAccount == nil {
+		log.Info("snapshot Account error")
+		// todo: record account by write file
+		return
+	}
+	if common.Bytes2Hex(slimAccount.CodeHash) == common.HexToHash("").String() {
+		return
+	}
+	log.Info("is contract address")
 	emptyKeyCount := 0
 	varCount := 0
 	arrayCount := 0
@@ -1096,7 +1149,6 @@ func traversalVar(ctx *cli.Context) error {
 		}
 	}
 	log.Info("array count:", arrayCount, "array item count", arrayVarCount, "var count", varCount)
-	return nil
 }
 
 func isArray(snap snapshot.Snapshot, contractAddress common.Address, slotIdx common.Hash) (result bool, slotLen int) {
@@ -1125,7 +1177,6 @@ func isArray(snap snapshot.Snapshot, contractAddress common.Address, slotIdx com
 		}
 	}
 	result = hasValue
-
 	return
 }
 

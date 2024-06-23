@@ -18,6 +18,7 @@ package snapshot
 
 import (
 	"bytes"
+	"fmt"
 	"sync"
 
 	"github.com/VictoriaMetrics/fastcache"
@@ -96,6 +97,7 @@ func (dl *diskLayer) Accounts() (map[common.Hash]*types.SlimAccount, error) {
 // Account directly retrieves the account associated with a particular hash in
 // the snapshot slim data format.
 func (dl *diskLayer) Account(hash common.Hash) (*types.SlimAccount, error) {
+	fmt.Printf("get account disk %s\n", hash.String())
 	data, err := dl.AccountRLP(hash)
 	if err != nil {
 		return nil, err

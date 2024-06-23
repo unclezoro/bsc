@@ -286,6 +286,7 @@ func (dl *diffLayer) Stale() bool {
 // Account directly retrieves the account associated with a particular hash in
 // the snapshot slim data format.
 func (dl *diffLayer) Account(hash common.Hash) (*types.SlimAccount, error) {
+	fmt.Printf("get account diff %s\n", hash.String())
 	data, err := dl.AccountRLP(hash)
 	if err != nil {
 		return nil, err

@@ -22,11 +22,11 @@ import (
 	"errors"
 	"fmt"
 	"github.com/ethereum/go-ethereum/common"
+	"golang.org/x/crypto/sha3"
 	"math/big"
 	"os"
 	"path/filepath"
 	"strings"
-	"sync"
 	"time"
 
 	"github.com/prometheus/tsdb/fileutil"
@@ -1087,11 +1087,21 @@ func traversalVar(ctx *cli.Context) error {
 	if err != nil {
 		return err
 	}
-
 	//
-	pool := make(chan struct{}, 20)
-	defer close(pool)
-	waitGroup := &sync.WaitGroup{}
+	cc := common.HexToAddress("0xc4f769a4a4540afded22d1315c56fed14a380ea8")
+	ccHash := crypto.HashData(sha3.NewLegacyKeccak256().(crypto.KeccakState), cc.Bytes())
+
+	cc1 := common.HexToAddress("0x0000000000000000000000000000000000001000")
+	ccHash1 := crypto.HashData(sha3.NewLegacyKeccak256().(crypto.KeccakState), cc1.Bytes())
+	fmt.Printf("System contract hash %s\n", ccHash1.String())
+
+	fmt.Printf("contract hash %s\n", ccHash.String())
+	a, err := snap.Account(ccHash)
+	if err != nil {
+		fmt.Println("failed to get err", err.Error())
+	} else {
+		fmt.Println("contract code hash", common.BytesToHash(a.CodeHash).String())
+	}
 
 	it := db.NewIterator(rawdb.SnapshotAccountPrefix, nil)
 	defer it.Release()
@@ -1102,21 +1112,10 @@ func traversalVar(ctx *cli.Context) error {
 		switch {
 		case bytes.HasPrefix(key, rawdb.SnapshotAccountPrefix) && len(key) == (len(rawdb.SnapshotAccountPrefix)+common.HashLength):
 			log.Info("DebugInfo", common.BytesToHash(key[1:]))
-			cc := common.HexToAddress("0xC806e70a62eaBC56E3Ee0c2669c2FF14452A9B3d")
-			log.Info(crypto.Keccak256Hash(cc[:]).String())
 			addrHash := common.BytesToHash(key[1:])
-			log.Info(fmt.Sprintf("address:%s", addrHash.String()))
-			pool <- struct{}{}
-			waitGroup.Add(1)
-			go func(address common.Hash) {
-				defer waitGroup.Done()
-				<-pool
-				traversalContract(snap, address)
-			}(addrHash)
+			log.Info(fmt.Sprintf("hash:%x", addrHash.String()))
 		}
 	}
-
-	waitGroup.Wait()
 
 	return nil
 }

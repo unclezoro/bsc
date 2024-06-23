@@ -21,6 +21,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"github.com/ethereum/go-ethereum/common"
 	"math/big"
 	"os"
 	"path/filepath"
@@ -31,7 +32,6 @@ import (
 	"github.com/prometheus/tsdb/fileutil"
 
 	"github.com/ethereum/go-ethereum/cmd/utils"
-	"github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/core"
 	"github.com/ethereum/go-ethereum/core/rawdb"
 	"github.com/ethereum/go-ethereum/core/state"
@@ -229,6 +229,26 @@ the expected order for the overlay tree migration.
 				Usage:     "Dump a specific block from storage (same as 'geth dump' but using snapshots)",
 				ArgsUsage: "[? <blockHash> | <blockNum>]",
 				Action:    traversalVar,
+				Flags: flags.Merge([]cli.Flag{
+					utils.ExcludeCodeFlag,
+					utils.ExcludeStorageFlag,
+					utils.StartKeyFlag,
+					utils.DumpLimitFlag,
+					utils.TriesInMemoryFlag,
+				}, utils.NetworkFlags, utils.DatabaseFlags),
+				Description: `
+This command is semantically equivalent to 'geth dump', but uses the snapshots
+as the backend data source, making this command a lot faster.
+
+The argument is interpreted as block number or hash. If none is provided, the latest
+block is used.
+`,
+			},
+			{
+				Name:      "keccak256",
+				Usage:     "Dump a specific block from storage (same as 'geth dump' but using snapshots)",
+				ArgsUsage: "[? <blockHash> | <blockNum>]",
+				Action:    keccak256,
 				Flags: flags.Merge([]cli.Flag{
 					utils.ExcludeCodeFlag,
 					utils.ExcludeStorageFlag,
@@ -1073,25 +1093,26 @@ func traversalVar(ctx *cli.Context) error {
 	defer close(pool)
 	waitGroup := &sync.WaitGroup{}
 
-	it := db.NewIterator(nil, nil)
+	it := db.NewIterator(rawdb.SnapshotAccountPrefix, nil)
 	defer it.Release()
-
-	hasher := crypto.NewKeccakState()
 
 	// Inspect key-value database first.
 	for it.Next() {
 		key := it.Key()
 		switch {
 		case bytes.HasPrefix(key, rawdb.SnapshotAccountPrefix) && len(key) == (len(rawdb.SnapshotAccountPrefix)+common.HashLength):
-			accountAddress := common.BytesToAddress(key)
-			log.Info(fmt.Sprintf("address:%s", accountAddress.String()))
+			log.Info("DebugInfo", common.BytesToHash(key[1:]))
+			cc := common.HexToAddress("0xC806e70a62eaBC56E3Ee0c2669c2FF14452A9B3d")
+			log.Info(crypto.Keccak256Hash(cc[:]).String())
+			addrHash := common.BytesToHash(key[1:])
+			log.Info(fmt.Sprintf("address:%s", addrHash.String()))
 			pool <- struct{}{}
 			waitGroup.Add(1)
-			go func(address common.Address) {
+			go func(address common.Hash) {
 				defer waitGroup.Done()
 				<-pool
-				traversalContract(snap, address, hasher)
-			}(accountAddress)
+				traversalContract(snap, address)
+			}(addrHash)
 		}
 	}
 
@@ -1100,11 +1121,11 @@ func traversalVar(ctx *cli.Context) error {
 	return nil
 }
 
-func traversalContract(snapshot snapshot.Snapshot, contractAddress common.Address, hasher crypto.KeccakState) {
+func traversalContract(snapshot snapshot.Snapshot, contractAddress common.Hash) {
 	var slimAccount *types.SlimAccount
 	var err error
 	for retry := 0; retry < 5; retry++ {
-		slimAccount, err = snapshot.Account(crypto.HashData(hasher, contractAddress.Bytes()))
+		slimAccount, err = snapshot.Account(contractAddress)
 		if err != nil {
 			time.Sleep(5 * time.Millisecond)
 			continue
@@ -1119,14 +1140,13 @@ func traversalContract(snapshot snapshot.Snapshot, contractAddress common.Addres
 	if common.Bytes2Hex(slimAccount.CodeHash) == common.HexToHash("").String() {
 		return
 	}
-	log.Info("is contract address")
 	emptyKeyCount := 0
 	varCount := 0
 	arrayCount := 0
 	arrayVarCount := 0
 	for i := 0; ; i++ {
 		key := common.BigToHash(big.NewInt(int64(i)))
-		enc, encErr := snapshot.Storage(crypto.Keccak256Hash(contractAddress[:]), crypto.Keccak256Hash(key.Bytes()))
+		enc, encErr := snapshot.Storage(contractAddress, crypto.Keccak256Hash(key.Bytes()))
 		if encErr != nil {
 			log.Info(fmt.Sprintf("key: %s, storage error: %v", key.String(), encErr))
 			continue
@@ -1151,15 +1171,13 @@ func traversalContract(snapshot snapshot.Snapshot, contractAddress common.Addres
 	log.Info("array count:", arrayCount, "array item count", arrayVarCount, "var count", varCount)
 }
 
-func isArray(snap snapshot.Snapshot, contractAddress common.Address, slotIdx common.Hash) (result bool, slotLen int) {
+func isArray(snap snapshot.Snapshot, contractAddress common.Hash, slotIdx common.Hash) (result bool, slotLen int) {
 	start := crypto.Keccak256Hash(slotIdx.Bytes())
-	log.Info("start", start.String())
 	emptyValue := 0
 	hasValue := false
 	for i := 0; ; i++ {
 		idx := common.BigToHash(big.NewInt(0).Add(start.Big(), big.NewInt(int64(i))))
-		log.Info("idx:", idx.String(), "big", idx.Big().String())
-		enc, err := snap.Storage(crypto.Keccak256Hash(contractAddress[:]), crypto.Keccak256Hash(idx.Bytes()))
+		enc, err := snap.Storage(contractAddress, crypto.Keccak256Hash(idx.Bytes()))
 		if err != nil {
 			log.Info("storage error", err.Error(), "slot", idx.String())
 			continue
@@ -1167,7 +1185,7 @@ func isArray(snap snapshot.Snapshot, contractAddress common.Address, slotIdx com
 		if len(enc) == 0 {
 			emptyValue++
 		} else {
-			log.Info("isArray", common.BytesToHash(enc).String())
+			log.Info("isArray " + common.BytesToHash(enc).String())
 			emptyValue = 0
 			hasValue = true
 			slotLen++
@@ -1250,3 +1268,9 @@ contract HelloWorld {
 }
 
 */
+
+func keccak256(ctx *cli.Context) error {
+	address := common.HexToAddress("C806e70a62eaBC56E3Ee0c2669c2FF14452A9B3d")
+	log.Info(crypto.Keccak256Hash(address[:]).String())
+	return nil
+}

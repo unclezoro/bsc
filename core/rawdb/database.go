@@ -484,15 +484,6 @@ func NewDatabaseWithFreezer(db ethdb.KeyValueStore, ancient string, namespace st
 			// store, otherwise we'll end up missing data. We check block #1 to decide
 			// if we froze anything previously or not, but do take care of databases with
 			// only the genesis block.
-			if ReadHeadHeaderHash(freezerDb) != common.BytesToHash(kvgenesis) {
-				// Key-value store contains more data than the genesis block, make sure we
-				// didn't freeze anything yet.
-				if kvblob, _ := db.Get(headerHashKey(1)); len(kvblob) == 0 {
-					printChainMetadata(freezerDb)
-					return nil, errors.New("ancient chain segments already extracted, please set --datadir.ancient to the correct path")
-				}
-				// Block #1 is still in the database, we're allowed to init a new freezer
-			}
 			// Otherwise, the head header is still the genesis, we're allowed to init a new
 			// freezer.
 		}
